@@ -20,7 +20,7 @@ def read_day(day_path):
 
     ch_hbox, dims, ecog_channels_idx, sorting_idx, valid = read_header(header_path)
     ch_val, srate, game_type, target = read_raw_data(data_path, ecog_channels_idx, sorting_idx, valid, ch_hbox, dims)
-    assert np.prod(ch_val[0].shape[1:]) == len(valid) == len(ch_hbox)
+    assert np.prod(ch_val[0].shape[:-1]) == len(valid) == len(ch_hbox)
     return ch_val, target, srate, game_type
 
 
@@ -48,17 +48,17 @@ def read_raw_data(data_path, ecog_channels_idx, sorting_idx, valid, hbox, dims):
         srate = recording['srate'].tolist()
         filtered_ch = highpass_filtering(sorted_ch, 1.5, srate)
         # reshape to create one image per time step and append
-        ch_val.append(np.reshape(filtered_ch, (*dims, -1)).transpose((2, 0, 1)))
+        ch_val.append(np.reshape(filtered_ch, (*dims, -1)))
         # extract raw target values
         targets.append(recording['tracker'].astype(np.float32))
-        assert ch_val[-1].shape[0] == targets[-1].shape[0]
+        assert ch_val[-1].shape[-1] == targets[-1].shape[0]
         # append sample rate
         srates.append(srate)
         # append game type
         gameType.append(recording['gameType'])
 
     if len(ch_val) > 1:
-        assert all([ch.shape[1:] == ch_val[0].shape[1:] for ch in ch_val[1:]])
+        assert all([ch.shape[:-1] == ch_val[0].shape[:-1] for ch in ch_val[1:]])
     return ch_val, srates, gameType, targets
 
 
