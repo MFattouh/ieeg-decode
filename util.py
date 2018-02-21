@@ -5,7 +5,6 @@ from mat73_to_pickle import recursive_dict
 import os
 import scipy.signal
 import sys
-from pandas import HDFStore, DataFrame, Series
 
 
 def read_day(day_path):
@@ -20,9 +19,9 @@ def read_day(day_path):
     header_path = os.path.join(day_path, 'alignedData', relative_path + '_header.mat')
 
     ch_hbox, dims, ecog_channels_idx, sorting_idx, valid = read_header(header_path)
-    ch_val, srate, target = read_raw_data(data_path, ecog_channels_idx, sorting_idx, valid, ch_hbox, dims)
-    assert np.prod(ch_val[0].shape[:-1]) == len(valid) == len(ch_hbox)
-    return ch_val, target, srate
+    ch_val, srate, game_type, target = read_raw_data(data_path, ecog_channels_idx, sorting_idx, valid, ch_hbox, dims)
+    assert np.prod(ch_val[0].shape[1:]) == len(valid) == len(ch_hbox)
+    return ch_val, target, srate, game_type
 
 
 def read_raw_data(data_path, ecog_channels_idx, sorting_idx, valid, hbox, dims):
@@ -34,7 +33,7 @@ def read_raw_data(data_path, ecog_channels_idx, sorting_idx, valid, hbox, dims):
     ch_val = []
     targets = []
     srates= []
-
+    gameType = []
     # for each recording
     for recording in data:
         # raw ecog data
@@ -49,16 +48,18 @@ def read_raw_data(data_path, ecog_channels_idx, sorting_idx, valid, hbox, dims):
         srate = recording['srate'].tolist()
         filtered_ch = highpass_filtering(sorted_ch, 1.5, srate)
         # reshape to create one image per time step and append
-        ch_val.append(np.reshape(filtered_ch, (*dims, -1)))
+        ch_val.append(np.reshape(filtered_ch, (*dims, -1)).transpose((2, 0, 1)))
         # extract raw target values
         targets.append(recording['tracker'].astype(np.float32))
-        assert ch_val[-1].shape[-1] == targets[-1].shape[-1]
+        assert ch_val[-1].shape[0] == targets[-1].shape[0]
         # append sample rate
         srates.append(srate)
+        # append game type
+        gameType.append(recording['gameType'])
 
     if len(ch_val) > 1:
-        assert all([ch.shape[:-1] == ch_val[0].shape[:-1] for ch in ch_val[1:]])
-    return ch_val, srates, targets
+        assert all([ch.shape[1:] == ch_val[0].shape[1:] for ch in ch_val[1:]])
+    return ch_val, srates, gameType, targets
 
 
 def read_header(header_path):
@@ -145,17 +146,20 @@ def read_dataset_dir(dataset_path):
 
 
 def create_dataset(input_dirs, output_file):
-    with HDFStore(output_file, 'w') as hdf:
+    with h5py.File(output_file, 'x') as hdf:
         trial = 0
         for day_path in input_dirs:
-            for ch_val, target, srate in zip(*read_day(day_path)):
+            for ch_val, target, srate, game_type in zip(*read_day(day_path)):
                 trial += 1
-                # create a data frame
-                df = DataFrame({'X': [ch_val[:, :, idx].squeeze() for idx in range(ch_val.shape[-1])], 'y': target})
-                # put the dataframe into the store
-                hdf.put('trial%d' % trial, df, 'f')
-                # add the sampling rate as a metadata
-                hdf.get_storer('trial%d' % trial).attrs.metadata = {'srate': srate}
+                # create a group
+                grp = hdf.create_group('trial%d' % trial)
+                # create the dataset
+                grp.create_dataset('X', data=ch_val)
+                grp.create_dataset('y', data=target)
+                # add the sampling rate to the attributes
+                grp.attrs['srate'] = srate
+                # add game type
+                grp.attrs['gameType'] = game_type
 
 
 if __name__ == '__main__':
