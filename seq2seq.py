@@ -14,17 +14,11 @@ class EncoderRNN(nn.Module):
         self.hidden_layers = n_layers
         # currently input should have shape TxNxC or NxTxC
         self.gru = nn.GRU(num_channels, hidden_size, n_layers, batch_first=batch_first)
-        self.keep_state = keep_state
-        self.hidden = None
 
-    def forward(self, ecog_inputs):
+    def forward(self, ecog_inputs, hidden):
         # Note: we run this all at once (over the whole input sequence)
-        output, self.hidden = self.gru(ecog_inputs, self.hidden)
-        return output, self.hidden
-
-    def init_hidden(self, h):
-        assert self.keep_state, 'do not init. hidden state if you do not want to keep it between iterations!'
-        self.hidden = h
+        output, hidden = self.gru(ecog_inputs, hidden)
+        return output, hidden
 
 
 class Attn(nn.Module):
@@ -158,8 +152,8 @@ class AttnDecoderRNN(nn.Module):
 #         return rnn2_output, context, hidden1, hidden2, attn_weights
 
 
-def train(encoder, decoder, fc, data_loader, encoder_optimizer, decoder_optimizer, fc_optimizer, criterion, clip=0,
-          teacher_forcing_ratio=0.5, cuda=False):
+def train(encoder, decoder, fc, data_loader, encoder_optimizer, decoder_optimizer, fc_optimizer, criterion,
+          keep_state=False, clip=0, teacher_forcing_ratio=0.5, cuda=False):
 
     encoder.train()
     decoder.train()
@@ -173,25 +167,26 @@ def train(encoder, decoder, fc, data_loader, encoder_optimizer, decoder_optimize
         batch_size = target.size()[0]
         # if the hidden is not none then the model should keep the state from on iteration to other
         # -> detach to stop back-propagation to older state
-        if encoder.keep_state and itr > 0:
-            encoder.hidden.detach_()
+        if keep_state and itr > 0:
+            encoder_hidden.detach_()
+            decoder_hidden.detach_()
+            decoder_input.detach_()
+            decoder_context.detach_()
 
         else:
-            hidden = Variable(torch.zeros(encoder.hidden_layers, list(data.size())[0],
-                                          encoder.hidden_size))
+            encoder_hidden = Variable(torch.zeros(encoder.hidden_layers, list(data.size())[0],
+                                      encoder.hidden_size))
             if cuda:
-                hidden = hidden.cuda()
-
-            encoder.init_hidden(hidden)
+                encoder_hidden = encoder_hidden.cuda()
 
         encoder_optimizer.zero_grad()
         decoder_optimizer.zero_grad()
         fc_optimizer.zero_grad()
         # forward pass through encoder
-        encoder_outputs, encoder_hidden = encoder(data)  # NxTxH
+        encoder_outputs, encoder_hidden = encoder(data, encoder_hidden)  # NxTxH
         # for the first time step assume last prediction is 0.
         # TODO: init. pred value should be reviewed
-        if itr == 0:
+        if itr == 0 or not keep_state:
             decoder_input = Variable(torch.zeros(batch_size, decoder.hidden_size))
             decoder_context = Variable(torch.zeros(batch_size, decoder.hidden_size))
             decoder_hidden = encoder_hidden  # Use last hidden state from encoder to start decoder
@@ -199,7 +194,7 @@ def train(encoder, decoder, fc, data_loader, encoder_optimizer, decoder_optimize
                 decoder_input = decoder_input.cuda()
                 decoder_context = decoder_context.cuda()
         # Choose whether to use teacher forcing
-        use_teacher_forcing = np.random.rand((1)) < teacher_forcing_ratio
+        use_teacher_forcing = np.random.rand(1) < teacher_forcing_ratio
         #     print('first decoder input', decoder_input.size())
 
         loss = 0
@@ -244,10 +239,9 @@ def train(encoder, decoder, fc, data_loader, encoder_optimizer, decoder_optimize
         encoder_optimizer.step()
         decoder_optimizer.step()
         fc_optimizer.step()
-        print(loss.data)
 
 
-def evaluate(encoder, decoder, fc, data_loader, criterion, writer=None, epoch=0, cuda=False):
+def evaluate(encoder, decoder, fc, data_loader, criterion, keep_state=False, writer=None, epoch=0, cuda=False):
     encoder.eval()
     decoder.eval()
     fc.eval()
@@ -258,8 +252,11 @@ def evaluate(encoder, decoder, fc, data_loader, criterion, writer=None, epoch=0,
         if cuda:
             data, target = data.cuda(), target.cuda()
 
-        if encoder.keep_state and itr > 0:
-            encoder.hidden.detach_()
+        if keep_state and itr > 0:
+            encoder_hidden.detach_()
+            decoder_hidden.detach_()
+            decoder_input.detach_()
+            decoder_context.detach_()
 
         else:
             hidden = Variable(torch.zeros(encoder.hidden_layers, list(data.size())[0],
@@ -273,7 +270,7 @@ def evaluate(encoder, decoder, fc, data_loader, criterion, writer=None, epoch=0,
         # for the first time step assume last prediction is 0.
         # TODO: init. pred value should be reviewed
         loss = 0
-        if itr == 0:
+        if itr == 0 or not keep_state:
             batch_size = target.size()[0]
             target_length = target.size()[1]
             num_classes = target.size()[2]
