@@ -20,7 +20,6 @@ def read_day(day_path):
 
     ch_hbox, dims, ecog_channels_idx, sorting_idx, valid = read_header(header_path)
     ch_val, srate, game_type, target = read_raw_data(data_path, ecog_channels_idx, sorting_idx, valid, ch_hbox, dims)
-    assert np.prod(ch_val[0].shape[:-1]) == len(valid) == len(ch_hbox)
     return ch_val, target, srate, game_type
 
 
@@ -37,18 +36,20 @@ def read_raw_data(data_path, ecog_channels_idx, sorting_idx, valid, hbox, dims):
     # for each recording
     for recording in data:
         # raw ecog data
-        ecog_channels = recording['ampData'][ecog_channels_idx].astype(np.float32)
-        # sort the channels
-        sorted_ch = ecog_channels[sorting_idx]
-        # fill non-valid channels with zeros
-        sorted_ch[np.bitwise_not(valid)] = 0
-        # apply CAR
-        car(sorted_ch, valid, hbox)
-        # apply high pass filtering
+        all_channels = recording['ampData'].astype(np.float32)
+        print(all_channels.shape)
+        # extract ecog-grid signals and apply CAR
+        ecog_channels = car(all_channels, ecog_channels_idx, valid, hbox)
+        # set non-valid channels to zero
+        ecog_channels[np.bitwise_not(valid[ecog_channels_idx])] = 0.0
+        print(ecog_channels.shape)
+        # apply high pass filtering with cut-off freq. 1.5 Hz
         srate = recording['srate'].tolist()
-        filtered_ch = highpass_filtering(sorted_ch, 1.5, srate)
+        filtered_ch = highpass_filtering(ecog_channels, 1.5, srate)
+        # sort the channels
+        sorted_ch = filtered_ch[sorting_idx]
         # reshape to create one image per time step and append
-        ch_val.append(np.reshape(filtered_ch, (*dims, -1)))
+        ch_val.append(np.reshape(sorted_ch, (*dims, -1)))
         # extract raw target values
         targets.append(recording['tracker'].astype(np.float32))
         assert ch_val[-1].shape[-1] == targets[-1].shape[0]
@@ -74,16 +75,16 @@ def read_header(header_path):
     if np.all(ecog_channels_idx == False):
         raise KeyError('No ECoG-Grid electrods found')
     if 'seizureOnset' in header:
-        soz = header['seizureOnset'][ecog_channels_idx]
+        soz = header['seizureOnset']
     else:
         soz = np.zeros((np.sum(ecog_channels_idx), 1))
     valid = soz == 0
     if 'rejected' in header:
-        rejected = header['rejected'][ecog_channels_idx]
+        rejected = header['rejected']
         not_rejected = np.array([np.all(rejected[idx] == 0) for idx in range(len(rejected))])
         valid = np.bitwise_and(valid, not_rejected)
     if 'headboxNumber' in header:
-        ch_hbox = header['headboxNumber'][ecog_channels_idx]
+        ch_hbox = header['headboxNumber']
     else:
         ch_hbox = np.zeros_like(soz)
     # sort the channels' attributes
@@ -91,33 +92,30 @@ def read_header(header_path):
     rows = [name[-2] for name in names]
     cols = [name[-1] for name in names]
     dims = (len(np.unique(rows)), len(np.unique(cols)))
-    sorting_idx = np.lexsort((cols, rows))
-    ch_hbox = ch_hbox[sorting_idx]
-    valid = valid[sorting_idx]
-    return ch_hbox, dims, ecog_channels_idx, sorting_idx, valid
+    ecog_sorting_idx = np.lexsort((cols, rows))
+    return ch_hbox, dims, ecog_channels_idx, ecog_sorting_idx, valid
 
 
-def car(ecog, valid, hbox):
+def car(all_channels, ecog_idx, valid, hbox):
     # computes the mean and std per headbox and then standardize the channels per hbox
-    assert len(ecog) == len(hbox)
-    if not isinstance(ecog, np.ndarray):
-        ecog = np.array(ecog, dtype=np.float32)
-    if not isinstance(hbox, np.ndarray):
-        hbox = np.array(hbox)
-
+    assert all_channels.shape[0] == len(ecog_idx) == len(hbox) == len(valid)
+    ecog = all_channels[ecog_idx,]
     unique_hbox = np.unique(hbox).tolist()
+
     for hb in unique_hbox:
+        # use only valid signals to compute mean and SD
         hb_idx = np.bitwise_and(hbox == hb, valid)
-        mean = np.mean(ecog[hb_idx, :], dtype=np.float32)
-        std = np.std(ecog[hb_idx, :], dtype=np.float32)
+        mean = np.mean(all_channels[hb_idx,], dtype=np.float32)
+        std = np.std(all_channels[hb_idx,], dtype=np.float32)
         assert std != 0
-        ecog[hb_idx, :] -= mean
-        ecog[hb_idx, :] /= std
+        ecog[hb_idx[ecog_idx],] -= mean
+        ecog[hb_idx[ecog_idx],] /= std
 
     return ecog
 
 
 def highpass_filtering(data, cut_feq, fs):
+    # data is CxT
     for filter_order in reversed(range(10)):
         b, a = scipy.signal.butter(filter_order, cut_feq / (fs / 2.0), btype='highpass')
         if np.all(np.abs(np.roots(a)) < 1):
@@ -128,7 +126,7 @@ def highpass_filtering(data, cut_feq, fs):
         "a: {:s}".format(str(a)))
     # from http://stackoverflow.com/a/8812737/1469195
 
-    return scipy.signal.lfilter(b, a, data, axis=1)
+    return scipy.signal.lfilter(b, a, data, axis=-1)
 
 
 def read_dataset_dir(dataset_path):
@@ -162,6 +160,30 @@ def create_dataset(input_dirs, output_file):
                 grp.attrs['gameType'] = game_type
 
 
+def generate_toy_dataset(root, name, size):
+    import random
+    import shutil
+    path = os.path.join(root, name)
+    if not os.path.exists(path):
+        os.mkdir(path)
+
+    # generate data file
+    data_path = os.path.join(path, 'data.txt')
+    with open(data_path, 'w') as fout:
+        for _ in range(size):
+            length = random.randint(1, 50)
+            seq = []
+            for _ in range(length):
+                seq.append(str(random.randint(0, 9)))
+            fout.write("\t".join([" ".join(seq), " ".join(reversed(seq))]))
+            fout.write('\n')
+
+    # generate vocabulary
+    src_vocab = os.path.join(path, 'vocab.source')
+    with open(src_vocab, 'w') as fout:
+        fout.write("\n".join([str(i) for i in range(10)]))
+    tgt_vocab = os.path.join(path, 'vocab.target')
+    shutil.copy(src_vocab, tgt_vocab)
 
 
 if __name__ == '__main__':
