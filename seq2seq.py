@@ -232,9 +232,10 @@ def train(encoder, decoder, fc, data_loader, encoder_optimizer, decoder_optimize
 
         # Backpropagation
         loss.backward()
-        torch.nn.utils.clip_grad_norm(encoder.parameters(), clip)
-        torch.nn.utils.clip_grad_norm(decoder.parameters(), clip)
-        torch.nn.utils.clip_grad_norm(fc.parameters(), clip)
+        if clip > 0:
+            torch.nn.utils.clip_grad_norm(encoder.parameters(), clip)
+            torch.nn.utils.clip_grad_norm(decoder.parameters(), clip)
+            torch.nn.utils.clip_grad_norm(fc.parameters(), clip)
 
         encoder_optimizer.step()
         decoder_optimizer.step()
