@@ -259,14 +259,14 @@ def evaluate(encoder, decoder, fc, data_loader, criterion, keep_state=False, wri
             decoder_context.detach_()
 
         else:
-            hidden = Variable(torch.zeros(encoder.hidden_layers, list(data.size())[0],
-                                          encoder.hidden_size))
+            encoder_hidden = Variable(torch.zeros(encoder.hidden_layers, list(data.size())[0],
+                                                  encoder.hidden_size))
             if cuda:
-                hidden = hidden.cuda()
+                encoder_hidden = encoder_hidden.cuda()
 
-            encoder.init_hidden(hidden)
+        # forward pass through encoder
+        encoder_outputs, encoder_hidden = encoder(data, encoder_hidden)  # NxTxH
 
-        encoder_outputs, encoder_hidden = encoder(data)  # NxTxH
         # for the first time step assume last prediction is 0.
         # TODO: init. pred value should be reviewed
         loss = 0
