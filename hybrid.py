@@ -239,7 +239,8 @@ def evaluate(model, data_loader, loss_fun, keep_state=False, writer=None, epoch=
         for batch_idx in range(batch_size):
             for class_idx in range(num_classes):
                 # compute correlation, apply fisher's transform
-                corr = np.arctanh(np.corrcoef(target[batch_idx, :, class_idx].squeeze(), output[batch_idx, :, class_idx].squeeze())[0, 1])
+                corr = np.arctanh(np.corrcoef(target[batch_idx, :, class_idx].squeeze(),
+                                              output[batch_idx, :, class_idx].squeeze())[0, 1])
                 if not np.isnan(corr):
                     cum_corr[batch_idx, class_idx] += corr
                     valid_corr[batch_idx, class_idx] += 1
