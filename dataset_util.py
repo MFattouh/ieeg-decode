@@ -18,12 +18,12 @@ def read_day(day_path):
     data_path = os.path.join(day_path, 'alignedData', relative_path + '_data.mat')
     header_path = os.path.join(day_path, 'alignedData', relative_path + '_header.mat')
 
-    ch_hbox, dims, ecog_channels_idx, sorting_idx, valid = read_header(header_path)
-    ch_val, srate, game_type, target = read_raw_data(data_path, ecog_channels_idx, sorting_idx, valid, ch_hbox, dims)
+    ecog_channels_idx, ch_hbox = read_header(header_path)
+    ch_val, srate, game_type, target = read_raw_data(data_path, ecog_channels_idx, ch_hbox)
     return ch_val, target, srate, game_type
 
 
-def read_raw_data(data_path, ecog_channels_idx, sorting_idx, valid, hbox, dims):
+def read_raw_data(data_path, ecog_channels_idx, hbox):
     try:
         data = sio.loadmat(data_path)['D']
     except NotImplementedError:
@@ -35,21 +35,15 @@ def read_raw_data(data_path, ecog_channels_idx, sorting_idx, valid, hbox, dims):
     gameType = []
     # for each recording
     for recording in data:
-        # raw ecog data
-        all_channels = recording['ampData'].astype(np.float32)
-        print(all_channels.shape)
-        # extract ecog-grid signals and apply CAR
-        ecog_channels = car(all_channels, ecog_channels_idx, valid, hbox)
-        # set non-valid channels to zero
-        ecog_channels[np.bitwise_not(valid[ecog_channels_idx])] = 0.0
-        print(ecog_channels.shape)
+        # extract raw ecog-grid data
+        ecog_channels = recording['ampData'][ecog_channels_idx].astype(np.float32)
+        # apply CAR
+        ecog_channels = car(ecog_channels, hbox[ecog_channels_idx])
         # apply high pass filtering with cut-off freq. 1.5 Hz
         srate = recording['srate'].tolist()
         filtered_ch = highpass_filtering(ecog_channels, 1.5, srate)
-        # sort the channels
-        sorted_ch = filtered_ch[sorting_idx]
-        # reshape to create one image per time step and append
-        ch_val.append(np.reshape(sorted_ch, (*dims, -1)))
+        # add to the list
+        ch_val.append(filtered_ch)
         # extract raw target values
         targets.append(recording['tracker'].astype(np.float32))
         assert ch_val[-1].shape[-1] == targets[-1].shape[0]
@@ -71,7 +65,7 @@ def read_header(header_path):
         header = recursive_dict(f['H/channels'])
 
     signalType = header['signalType']
-    ecog_channels_idx = signalType == 'ECoG-Grid'
+    ecog_channels_idx = np.chararray.find(np.chararray.lower(signalType), 'ecog-grid') != -1
     if np.all(ecog_channels_idx == False):
         raise KeyError('No ECoG-Grid electrods found')
     if 'seizureOnset' in header:
@@ -87,31 +81,26 @@ def read_header(header_path):
         ch_hbox = header['headboxNumber']
     else:
         ch_hbox = np.zeros_like(soz)
-    # sort the channels' attributes
-    names = header['name'][ecog_channels_idx]
-    rows = [name[-2] for name in names]
-    cols = [name[-1] for name in names]
-    dims = (len(np.unique(rows)), len(np.unique(cols)))
-    ecog_sorting_idx = np.lexsort((cols, rows))
-    return ch_hbox, dims, ecog_channels_idx, ecog_sorting_idx, valid
+
+    ecog_channels_idx = np.bitwise_and(ecog_channels_idx, valid)
+    return ecog_channels_idx, ch_hbox
 
 
-def car(all_channels, ecog_idx, valid, hbox):
+def car(channels, hbox):
     # computes the mean and std per headbox and then standardize the channels per hbox
-    assert all_channels.shape[0] == len(ecog_idx) == len(hbox) == len(valid)
-    ecog = all_channels[ecog_idx,]
+    assert channels.shape[0] == len(hbox)
     unique_hbox = np.unique(hbox).tolist()
 
     for hb in unique_hbox:
         # use only valid signals to compute mean and SD
-        hb_idx = np.bitwise_and(hbox == hb, valid)
-        mean = np.mean(all_channels[hb_idx,], dtype=np.float32)
-        std = np.std(all_channels[hb_idx,], dtype=np.float32)
+        hb_idx = hbox == hb
+        mean = np.mean(channels[hb_idx, ], dtype=np.float32)
+        std = np.std(channels[hb_idx, ], dtype=np.float32)
         assert std != 0
-        ecog[hb_idx[ecog_idx],] -= mean
-        ecog[hb_idx[ecog_idx],] /= std
+        channels -= mean
+        channels /= std
 
-    return ecog
+    return channels
 
 
 def highpass_filtering(data, cut_feq, fs):
