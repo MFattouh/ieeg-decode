@@ -1,5 +1,6 @@
 from pytorch_util import *
 from seq2seq import *
+from hybrid import *
 import unittest
 import numpy as np
 from torch.utils.data import DataLoader
@@ -106,6 +107,23 @@ class TestEncoderRNN(unittest.TestCase):
         self.assertEqual([seq_len, batch_size, hidden_size], list(output.size()), 'output size is wrong')
         self.assertEqual([n_layers, batch_size, hidden_size], list(hidden.size()), 'hidden size is wrong')
 
+
+class TestHybridModel(unittest.TestCase):
+    def test_BNLSTM(self):
+        hidden_size = 64
+        n_layers = 2
+        in_channels = 62
+        batch_size = 12
+        window = 1000
+        model = HybridModel(rnn_type='lstm', num_classes=1, rnn_hidden_size=hidden_size, rnn_layers=n_layers,
+                            in_channels=in_channels,
+                            channel_filters=[], time_filters=[], time_kernels=[], fc_size=[10],
+                            output_stride=0, batch_norm=True, max_length=window, dropout=0.1)
+
+        hidden = model.init_hidden(batch_size)
+        dummy_input = Variable(torch.randn(batch_size, in_channels, window))
+        dummy_output, hidden = model(dummy_input, hidden)
+        print(dummy_output.size())
 
 # class TestSimpleEncDec(unittest.TestCase):
 #     n_channels = 64
