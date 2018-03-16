@@ -132,21 +132,35 @@ def read_dataset_dir(dataset_path):
     return subject_pathes
 
 
-def create_dataset(input_dirs, output_file):
-    with h5py.File(output_file, 'x') as hdf:
+def create_dataset(input_dirs, output_file, file_format):
+    if file_format == 'hdf':
+        with h5py.File(output_file, 'x') as hdf:
+            trial = 0
+            for day_path in input_dirs:
+                for ch_val, target, srate, game_type in zip(*read_day(day_path)):
+                    trial += 1
+                    # create a group
+                    grp = hdf.create_group('trial%d' % trial)
+                    # create the dataset
+                    grp.create_dataset('X', data=ch_val)
+                    grp.create_dataset('y', data=target)
+                    # add the sampling rate to the attributes
+                    grp.attrs['srate'] = srate
+                    # add game type
+                    grp.attrs['gameType'] = game_type
+
+    else:
         trial = 0
+        dataset_dict = dict()
         for day_path in input_dirs:
             for ch_val, target, srate, game_type in zip(*read_day(day_path)):
                 trial += 1
-                # create a group
-                grp = hdf.create_group('trial%d' % trial)
-                # create the dataset
-                grp.create_dataset('X', data=ch_val)
-                grp.create_dataset('y', data=target)
-                # add the sampling rate to the attributes
-                grp.attrs['srate'] = srate
-                # add game type
-                grp.attrs['gameType'] = game_type
+                dataset_dict['trial%d' % trial] = {'X': ch_val,
+                                                   'y': target,
+                                                   'srate': srate,
+                                                   'gameType': game_type}
+        sio.savemat(output_file, dataset_dict)
+
 
 
 def generate_toy_dataset(root, name, size):
@@ -176,17 +190,18 @@ def generate_toy_dataset(root, name, size):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) > 1:
-        dataset_path = sys.argv[1]
-        all_subject_pathes = read_dataset_dir(dataset_path)
-        for subject_id, subject_pathes in all_subject_pathes.items():
-            subject_dataset_path = os.path.join(dataset_path, subject_id + '.h5')
-            try:
-                print('Creating dataset for subject', subject_id)
-                create_dataset(subject_pathes, subject_dataset_path)
-            except KeyError:
-                os.remove(subject_dataset_path)
-                continue
-    else:
-        print('You should pass the path to the dataset')
+    assert len(sys.argv) > 2, 'You should pass the path to the dataset and output file format'
+    dataset_path = sys.argv[1]
+    assert sys.argv[2] == 'hdf' or sys.argv[2] == 'mat', sys.argv[2] + 'is not supported'
+    extension = '.h5' if sys.argv[2] == 'hdf' else '.mat'
+    all_subject_pathes = read_dataset_dir(dataset_path)
+    for subject_id, subject_pathes in all_subject_pathes.items():
+        subject_dataset_path = os.path.join(dataset_path, subject_id + extension)
+        try:
+            print('Creating dataset for subject', subject_id)
+            create_dataset(subject_pathes, subject_dataset_path, sys.argv[2])
+        except KeyError:
+            os.remove(subject_dataset_path)
+            continue
+
 
