@@ -268,7 +268,7 @@ class LSTM(nn.Module):
         output = torch.stack(output, 0)
         return output, hx
 
-    def forward(self, input_, length=None, hx=None):
+    def forward(self, input_, hx=None, length=None):
         if self.batch_first:
             input_ = input_.transpose(0, 1)
         max_time, batch_size, _ = input_.size()
@@ -278,7 +278,7 @@ class LSTM(nn.Module):
                 device = input_.get_device()
                 length = length.cuda(device)
         if hx is None:
-            hx = Variable(input_.data.new(batch_size, self.hidden_size).zero_())
+            hx = Variable(self.num_layers, input_.data.new(batch_size, self.hidden_size).zero_())
             hx = (hx, hx)
         h_n = []
         c_n = []
@@ -286,7 +286,7 @@ class LSTM(nn.Module):
         for layer in range(self.num_layers):
             cell = self.get_cell(layer)
             layer_output, (layer_h_n, layer_c_n) = LSTM._forward_rnn(
-                cell=cell, input_=input_, length=length, hx=hx)
+                cell=cell, input_=input_, length=length, hx=(hx[0][layer], hx[1][layer]))
             input_ = self.dropout_layer(layer_output)
             h_n.append(layer_h_n)
             c_n.append(layer_c_n)
