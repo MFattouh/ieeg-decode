@@ -196,7 +196,8 @@ def main(dataset_path, extension):
             print('Creating dataset for subject', subject_id)
             create_dataset(subject_pathes, subject_dataset_path, sys.argv[2])
         except KeyError:
-            os.remove(subject_dataset_path)
+            if extension == '.h5':
+                os.remove(subject_dataset_path)
             continue
 
 
