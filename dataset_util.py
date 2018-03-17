@@ -41,9 +41,9 @@ def read_raw_data(data_path, ecog_channels_idx, hbox):
         ecog_channels = car(ecog_channels, hbox[ecog_channels_idx])
         # apply high pass filtering with cut-off freq. 1.5 Hz
         srate = recording['srate'].tolist()
-        filtered_ch = highpass_filtering(ecog_channels, 1.5, srate)
+        ecog_channels = highpass_filtering(ecog_channels, 1.5, srate)
         # add to the list
-        ch_val.append(filtered_ch)
+        ch_val.append(ecog_channels)
         # extract raw target values
         targets.append(recording['tracker'].astype(np.float32))
         assert ch_val[-1].shape[-1] == targets[-1].shape[0]
