@@ -162,7 +162,6 @@ def create_dataset(input_dirs, output_file, file_format):
         sio.savemat(output_file, dataset_dict)
 
 
-
 def generate_toy_dataset(root, name, size):
     import random
     import shutil
@@ -189,11 +188,7 @@ def generate_toy_dataset(root, name, size):
     shutil.copy(src_vocab, tgt_vocab)
 
 
-if __name__ == '__main__':
-    assert len(sys.argv) > 2, 'You should pass the path to the dataset and output file format'
-    dataset_path = sys.argv[1]
-    assert sys.argv[2] == 'hdf' or sys.argv[2] == 'mat', sys.argv[2] + 'is not supported'
-    extension = '.h5' if sys.argv[2] == 'hdf' else '.mat'
+def main(dataset_path, extension):
     all_subject_pathes = read_dataset_dir(dataset_path)
     for subject_id, subject_pathes in all_subject_pathes.items():
         subject_dataset_path = os.path.join(dataset_path, subject_id + extension)
@@ -203,5 +198,13 @@ if __name__ == '__main__':
         except KeyError:
             os.remove(subject_dataset_path)
             continue
+
+
+if __name__ == '__main__':
+    assert len(sys.argv) > 2, 'You should pass the path to the dataset and output file format'
+    assert sys.argv[2] == 'hdf' or sys.argv[2] == 'mat', sys.argv[2] + 'is not supported'
+    dataset_path = sys.argv[1]
+    extension = '.h5' if sys.argv[2] == 'hdf' else '.mat'
+    main(dataset_path, extension)
 
 
