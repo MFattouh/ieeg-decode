@@ -15,6 +15,74 @@ supported_rnns = {
 supported_rnns_inv = dict((v, k) for k, v in supported_rnns.items())
 
 
+# from https://github.com/robintibor/braindecode/blob/master/braindecode/torch_ext/modules.py
+class Expression(torch.nn.Module):
+    """
+    Compute given expression on forward pass.
+
+    Parameters
+    ----------
+    expression_fn: function
+        Should accept variable number of objects of type
+        `torch.autograd.Variable` to compute its output.
+    """
+
+    def __init__(self, expression_fn):
+        super(Expression, self).__init__()
+        self.expression_fn = expression_fn
+
+    def forward(self, *x):
+        return self.expression_fn(*x)
+
+    def __repr__(self):
+        if (hasattr(self.expression_fn, 'func') and
+                hasattr(self.expression_fn, 'kwargs')):
+            expression_str = "{:s} {:s}".format(
+                self.expression_fn.func.__name__,
+                str(self.expression_fn.kwargs))
+        else:
+            expression_str = self.expression_fn.__name__
+        return (self.__class__.__name__ + '(' +
+                'expression=' + str(expression_str) + ')')
+
+
+def _transpose_C_to_W():
+    # x is expected to be Nx1xCxT
+    return Expression(lambda x: x.transpose(2, 1))  # NxCx1xT
+
+
+def _rnn_to_bn_transpose():
+    # x is expected to be TxNxH
+    return Expression(lambda x: x.permute(1, 2, 0))  # NxHxT
+
+
+def _rnn_to_fc_transpose():
+    # x is expected to be TxNxH
+    # x = x..contiguous()
+    return Expression(lambda x: x.transpose(1, 0))  # NxTxH
+
+
+# the next two functions perform exactly the same operation. just for the sake of calrity
+def _bn_to_fc_transpose():
+    # x is expected to be NxHxT
+    return Expression(lambda x: x.transpose(2, 1))  # NxTxH
+
+
+def _fc_to_bn_transpose():
+    # x is expected to be NxTxH
+    return Expression(lambda x: x.transpose(2, 1))  # NxHxT
+
+
+def _expand_last():
+    # x is expected to be NxHxT
+    return Expression(lambda x: x.unsqueeze(3))  # NxHxTx1
+
+
+def _drop_last():
+    # x is expected to be NxHxTx1
+    return Expression(lambda x: x.squeeze(3))  # NxHxT
+
+
 class HybridModel(nn.Module):
     def __init__(self, rnn_type='lstm', in_channels=64, channel_filters=[], time_filters=[], time_kernels=[],
                  rnn_hidden_size=768, rnn_layers=5, max_length=None, fc_size=[10], num_classes=1,
@@ -36,41 +104,59 @@ class HybridModel(nn.Module):
         self._in_1d_filters = channel_filters
         self._in_2d_filters = time_filters
         self._in_2d_kernels = time_kernels
+        self._bn = batch_norm
+        self._dropout = dropout
 
-        num_1d_filters = in_channels
+        # channels conv. layers. convolutions are done over all channels in the first layer
+        # and over all output filters in later layers.
         if channel_filters:
-            in_1d_conv = list()
-            in_1d_conv.append(('layer0', nn.Conv1d(in_channels, in_channels * channel_filters[0], kernel_size=1, groups=in_channels)))
-            num_1d_filters = num_1d_filters * channel_filters[0]
+            channels_conv = list()
+            channels_conv.append(('conv0', nn.Conv2d(1, channel_filters[0], kernel_size=(in_channels, 1),
+                                                     bias=not batch_norm)))
+            channels_conv.append(('tanh0', nn.Hardtanh(0, 20, inplace=True)))
             if batch_norm:
-                in_1d_conv.append(('BN', nn.BatchNorm1d(num_1d_filters)))
-            in_1d_conv.append(('tanh', nn.Hardtanh(0, 20, inplace=True)))
-            for x in range(1, len(channel_filters)):
-                in_1d_conv.append(('layer%d' % x, nn.Conv1d(num_1d_filters, num_1d_filters * channel_filters[x], kernel_size=1, groups=in_channels)))
-                num_1d_filters = num_1d_filters * channel_filters[x]
-                if batch_norm:
-                    in_1d_conv.append(('BN%d' % x, nn.BatchNorm1d(num_1d_filters)))
-                in_1d_conv.append(('tanh%d' % x, nn.Hardtanh(0, 20, inplace=True)))
+                channels_conv.append(('BN0', nn.BatchNorm2d(channel_filters[0])))
+            if len(channel_filters) > 1:
+                for layer, num_filters in enumerate(channel_filters[1:], 1):
+                    channels_conv.append(('trans%d1' % layer, _transpose_C_to_W()))
+                    channels_conv.append(('conv%d' % layer, nn.Conv2d(1, num_filters,
+                                                                      kernel_size=(channel_filters[layer-1], 1),
+                                                                      bias=not batch_norm)))
+                    channels_conv.append(('tanh%d' % layer, nn.Hardtanh(0, 20, inplace=True)))
+                    if batch_norm:
+                        channels_conv.append(('BN%d' % layer, nn.BatchNorm2d(num_filters)))
+                    channels_conv.append(('trans%d2' % layer, _transpose_C_to_W()))
+            else:
+                channels_conv.append(('trans0', _transpose_C_to_W()))
 
-            self.channel_conv = nn.Sequential(OrderedDict(in_1d_conv))
-
+            # no need for batch normalization if output fed to the rnn directly since will be done on rnn input
+            if batch_norm and not time_filters:
+                channels_conv = channels_conv[:-1]
+            self.channel_conv = nn.Sequential(OrderedDict(channels_conv))
         else:
             self.channel_conv = None
-        rnn_input_size = num_1d_filters
+
+        # convolution layers over time dimension only
+        rnn_input_size = channel_filters[-1] if channel_filters else in_channels
         if time_filters:
-            in_2d_conv = list()
-            in_2d_conv.append(('layer0', nn.Conv2d(1, time_filters[0], kernel_size=(1, time_kernels[0]))))
+            time_conv = list()
+            time_conv.append(('conv0', nn.Conv2d(1, time_filters[0], kernel_size=(1, time_kernels[0]),
+                                                 bias=not batch_norm)))
             if batch_norm:
-                in_2d_conv.append(('BN0', nn.BatchNorm2d(time_filters[0])))
-            in_2d_conv.append(('tanh0', nn.Hardtanh(0, 20, inplace=True)))
+                time_conv.append(('BN0', nn.BatchNorm2d(time_filters[0])))
+            time_conv.append(('tanh0', nn.Hardtanh(0, 20, inplace=True)))
             for x in range(1, len(time_filters)):
-                in_2d_conv.append(('layer%d' % x, nn.Conv2d(time_filters[x - 1], time_filters[x], kernel_size=(1, time_kernels[x]))))
+                time_conv.append(('conv%d' % x, nn.Conv2d(time_filters[x - 1], time_filters[x],
+                                                          kernel_size=(1, time_kernels[x]), bias=not batch_norm)))
                 if batch_norm:
-                    in_2d_conv.append(('BN%d' % x, nn.BatchNorm2d(time_filters[x])))
-                in_2d_conv.append(('tanh%d' % x, nn.Hardtanh(0, 20, inplace=True)))
+                    time_conv.append(('BN%d' % x, nn.BatchNorm2d(time_filters[x])))
+                time_conv.append(('tanh%d' % x, nn.Hardtanh(0, 20, inplace=True)))
 
             rnn_input_size *= time_filters[-1]
-            self.time_conv = nn.Sequential(OrderedDict(in_2d_conv))
+            # remove last batch normalization layer since the bnlstm will do it
+            if batch_norm:
+                time_conv = time_conv[:-1]
+            self.time_conv = nn.Sequential(OrderedDict(time_conv))
         else:
             self.time_conv = None
 
@@ -83,23 +169,53 @@ class HybridModel(nn.Module):
 
         if fc_size:
             fc_out = list()
-            # if dropout > 0:
-            #     fc_out.append(('dropout0', nn.Dropout2d(dropout)))
-            fc_out.append(('layer0', nn.Linear(rnn_hidden_size, fc_size[0], bias=True)))
-            fc_out.append(('tanh0', nn.Hardtanh(-20, 20)))
-            for x in range(1, len(fc_size)):
-                # if dropout > 0:
-                #     fc_out.append(('dropout%d' % x), nn.Droput2d(dropout))
-                fc_out.append(('layer%d' % x , nn.Linear(fc_size[x - 1], fc_size[x], bias=True)))
-                fc_out.append(('tanh%d' % x, nn.Hardtanh(-20, 20)))
+            if batch_norm or dropout > 0:
+                fc_out.append(('trans01', _rnn_to_bn_transpose()))
+                if batch_norm:
+                    fc_out.append(('BN0', nn.BatchNorm1d(rnn_hidden_size)))
+                if dropout > 0:
+                    fc_out.append(('expand0', _expand_last()))
+                    fc_out.append(('dropout0', nn.Dropout2d(dropout)))
+                    fc_out.append(('squeeze0', _drop_last()))
+                fc_out.append(('trans02', _bn_to_fc_transpose()))
+            else:
+                fc_out.append(('trans0', _rnn_to_fc_transpose()))
 
-            fc_out.append(('output', nn.Linear(fc_size[-1], num_classes, bias=True)))
+            fc_out.append(('linear0', nn.Linear(rnn_hidden_size, fc_size[0], bias=not batch_norm)))
+            fc_out.append(('tanh0', nn.Hardtanh(-20, 20)))
+            if len(fc_size) > 1:
+                for layer, num_units in enumerate(fc_size[1:], 1):
+                    if batch_norm or dropout > 0:
+                        fc_out.append(('trans%d1' % layer, _fc_to_bn_transpose()))
+                        if batch_norm:
+                            fc_out.append(('BN%d' % layer, nn.BatchNorm1d(rnn_hidden_size)))
+                        if dropout > 0:
+                            fc_out.append(('expand%d' % layer, _expand_last()))
+                            fc_out.append(('dropout%d' % layer, nn.Dropout2d(dropout)))
+                            fc_out.append(('squeeze%d' % layer, _drop_last()))
+                        fc_out.append(('trans%d2' % layer, _bn_to_fc_transpose()))
+
+                fc_out.append(('linear%d' % layer, nn.Linear(fc_size[layer - 1], num_units, bias=not batch_norm)))
+                fc_out.append(('tanh%d' % layer, nn.Hardtanh(-20, 20)))
+
+            # if dropout > 0:
+            #     fc_out.append(('output dropout', nn.Dropout(dropout)))
+            fc_out.append(('linear', nn.Linear(fc_size[-1], num_classes, bias=not batch_norm)))
             fully_connected = nn.Sequential(OrderedDict(fc_out))
 
         else:
             fc_out = list()
-            # if dropout > 0:
-            #     fc_out.append(('dropout', nn.Dropout2d(dropout)))
+            if batch_norm or dropout > 0:
+                fc_out.append('trans', _rnn_to_bn_transpose())
+                if batch_norm:
+                    fc_out.append('BN', nn.BatchNorm1d(rnn_hidden_size))
+                if dropout > 0:
+                    fc_out.append('expand', _expand_last())
+                    fc_out.append(('dropout', nn.Dropout2d(dropout)))
+                    fc_out.append('squeeze', _drop_last())
+                fc_out.append('detrans', _bn_to_fc_transpose())
+            else:
+                fc_out.append('trans', _rnn_to_fc_transpose())
             fc_out.append(('output', nn.Linear(rnn_hidden_size, num_classes, bias=True)))
             fully_connected = nn.Sequential(OrderedDict(fc_out))
 
@@ -114,32 +230,24 @@ class HybridModel(nn.Module):
             return hidden
 
     def forward(self, x, hidden):
-        # x is expected to be NxCxT
+        # x is expected to be Nx1xCxT
         if self.channel_conv is not None:
-            x = self.channel_conv(x)
+            x = self.channel_conv(x)   # NxCx1xT
         if self.time_conv is not None:
-            x = x.unsqueeze(dim=3)  # NxCx1XT
-            x = x.permute(0, 3, 1, 2)  # Nx1xCxT
-            x = self.time_conv(x)
-            sizes = x.size()
-            x = x.view(sizes[0], sizes[1] * sizes[2], sizes[3])  # Collapse feature dimension
+            x = self.time_conv(x)      # NxC2xC1xT2
 
-        x = x.transpose(1, 2).transpose(0, 1).contiguous()  # TxNxC
+        sizes = x.size()
+        x = x.view(sizes[0], sizes[1] * sizes[2], sizes[3])  # Collapse feature dimension
+        x = x.transpose(1, 2).transpose(0, 1).contiguous()   # TxNxC
         x, hidden = self.rnns(x, hidden)  # TxNxH
 
         if self._output_stride > 1:
             x = x[self._output_stride-1::self._output_stride]
 
-        if self.fc_bn is not None:
-            x = x.permute(1, 2, 0).contiguous()  #NxHxT
-            x = self.fc_bn(x)
-            x = x.permute(0, 2, 1).contiguous()  #NxTxH
-        else:
-            x = x.permute(1, 0, 2).contiguous()  #NxTxH
+        print(x.size())
+        x = self.fc(x)  # NxTxH
 
-        x = self.fc(x).unsqueeze(1)  # Nx1xTxH
-
-        return x.squeeze(1), hidden  # N x T x nClasses
+        return x, hidden  # N x T x nClasses
 
     @staticmethod
     def get_param_size(model):
@@ -162,7 +270,9 @@ class HybridModel(nn.Module):
             "rnn_layers":model._hidden_layers,
             "rnn_type": supported_rnns_inv[model.rnn_type],
             "fully_connected": model._linear_hidden_size,
-            "output_stride":model._output_stride
+            "output_stride":model._output_stride,
+            "batch normalization": model._bn,
+            "dropout": model._dropout
         }
         return meta
 
@@ -170,7 +280,7 @@ class HybridModel(nn.Module):
 def train(model, data_loader, optimizer, loss_fun, keep_state=False, clip=0, cuda=False):
     model.train()
     for itr, (data, target_cpu) in enumerate(data_loader):
-        data, target = Variable(data.squeeze(0)), Variable(target_cpu.squeeze(0))
+        data, target = Variable(data.transpose(1, 0)), Variable(target_cpu.squeeze(0))
         if cuda:
             data, target = data.cuda(), target.cuda()
 
@@ -206,7 +316,7 @@ def evaluate(model, data_loader, loss_fun, keep_state=False, writer=None, epoch=
     # loop over the dataset
     avg_loss = 0
     for itr, (data, target_cpu) in enumerate(data_loader):
-        data, target = Variable(data.squeeze(0)), Variable(target_cpu.squeeze(0))
+        data, target = Variable(data.transpose(1, 0)), Variable(target_cpu.squeeze(0))
         if cuda:
             data, target = data.cuda(), target.cuda()
 
@@ -258,4 +368,5 @@ def evaluate(model, data_loader, loss_fun, keep_state=False, writer=None, epoch=
         if writer is not None:
             writer.add_scalars('corr', avg_corr, epoch)
     return avg_loss, avg_corr
+
 
