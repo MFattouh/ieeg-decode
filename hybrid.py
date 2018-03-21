@@ -233,7 +233,6 @@ class HybridModel(nn.Module):
                 initializer(fc_out[-1][1].weight)
             fully_connected = nn.Sequential(OrderedDict(fc_out))
 
-        self.fc_bn = nn.BatchNorm1d(rnn_hidden_size) if batch_norm else None
         self.fc = fully_connected
 
     def init_hidden(self, batch_size):
