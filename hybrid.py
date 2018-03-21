@@ -86,7 +86,7 @@ def _drop_last():
 class HybridModel(nn.Module):
     def __init__(self, rnn_type='lstm', in_channels=64, channel_filters=[], time_filters=[], time_kernels=[],
                  rnn_hidden_size=768, rnn_layers=5, max_length=None, fc_size=[10], num_classes=1,
-                 output_stride=0, dropout=0.1, batch_norm=False):
+                 output_stride=0, dropout=0.1, batch_norm=False, initializer=None):
 
         super(HybridModel, self).__init__()
         assert rnn_type.lower() in supported_rnns, 'unknown recurrent type'+rnn_type
@@ -113,6 +113,8 @@ class HybridModel(nn.Module):
             channels_conv = list()
             channels_conv.append(('conv0', nn.Conv2d(1, channel_filters[0], kernel_size=(in_channels, 1),
                                                      bias=not batch_norm)))
+            if initializer is not None:
+                initializer(channels_conv[-1][1].weight)
             channels_conv.append(('tanh0', nn.Hardtanh(0, 20, inplace=True)))
             if batch_norm:
                 channels_conv.append(('BN0', nn.BatchNorm2d(channel_filters[0])))
@@ -122,6 +124,8 @@ class HybridModel(nn.Module):
                     channels_conv.append(('conv%d' % layer, nn.Conv2d(1, num_filters,
                                                                       kernel_size=(channel_filters[layer-1], 1),
                                                                       bias=not batch_norm)))
+                    if initializer is not None:
+                        initializer(channels_conv[-1][1].weight)
                     channels_conv.append(('tanh%d' % layer, nn.Hardtanh(0, 20, inplace=True)))
                     if batch_norm:
                         channels_conv.append(('BN%d' % layer, nn.BatchNorm2d(num_filters)))
@@ -142,12 +146,16 @@ class HybridModel(nn.Module):
             time_conv = list()
             time_conv.append(('conv0', nn.Conv2d(1, time_filters[0], kernel_size=(1, time_kernels[0]),
                                                  bias=not batch_norm)))
+            if initializer is not None:
+                initializer(time_conv[-1][1].weight)
             if batch_norm:
                 time_conv.append(('BN0', nn.BatchNorm2d(time_filters[0])))
             time_conv.append(('tanh0', nn.Hardtanh(0, 20, inplace=True)))
             for x in range(1, len(time_filters)):
                 time_conv.append(('conv%d' % x, nn.Conv2d(time_filters[x - 1], time_filters[x],
                                                           kernel_size=(1, time_kernels[x]), bias=not batch_norm)))
+                if initializer is not None:
+                    initializer(time_conv[-1][1].weight)
                 if batch_norm:
                     time_conv.append(('BN%d' % x, nn.BatchNorm2d(time_filters[x])))
                 time_conv.append(('tanh%d' % x, nn.Hardtanh(0, 20, inplace=True)))
@@ -182,6 +190,8 @@ class HybridModel(nn.Module):
                 fc_out.append(('trans0', _rnn_to_fc_transpose()))
 
             fc_out.append(('linear0', nn.Linear(rnn_hidden_size, fc_size[0], bias=not batch_norm)))
+            if initializer is not None:
+                initializer(fc_out[-1][1].weight)
             fc_out.append(('tanh0', nn.Hardtanh(-20, 20)))
             if len(fc_size) > 1:
                 for layer, num_units in enumerate(fc_size[1:], 1):
@@ -196,9 +206,13 @@ class HybridModel(nn.Module):
                         fc_out.append(('trans%d2' % layer, _bn_to_fc_transpose()))
 
                     fc_out.append(('linear%d' % layer, nn.Linear(fc_size[layer - 1], num_units, bias=not batch_norm)))
+                    if initializer is not None:
+                        initializer(fc_out[-1][1].weight)
                     fc_out.append(('tanh%d' % layer, nn.Hardtanh(-20, 20)))
 
             fc_out.append(('linear', nn.Linear(fc_size[-1], num_classes, bias=not batch_norm)))
+            if initializer is not None:
+                initializer(fc_out[-1][1].weight)
             fully_connected = nn.Sequential(OrderedDict(fc_out))
 
         else:
@@ -214,7 +228,9 @@ class HybridModel(nn.Module):
                 fc_out.append('detrans', _bn_to_fc_transpose())
             else:
                 fc_out.append('trans', _rnn_to_fc_transpose())
-            fc_out.append(('output', nn.Linear(rnn_hidden_size, num_classes, bias=True)))
+            fc_out.append(('output', nn.Linear(rnn_hidden_size, num_classes, bias=not batch_norm)))
+            if initializer is not None:
+                initializer(fc_out[-1][1].weight)
             fully_connected = nn.Sequential(OrderedDict(fc_out))
 
         self.fc_bn = nn.BatchNorm1d(rnn_hidden_size) if batch_norm else None
