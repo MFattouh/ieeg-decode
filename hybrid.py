@@ -195,11 +195,9 @@ class HybridModel(nn.Module):
                             fc_out.append(('squeeze%d' % layer, _drop_last()))
                         fc_out.append(('trans%d2' % layer, _bn_to_fc_transpose()))
 
-                fc_out.append(('linear%d' % layer, nn.Linear(fc_size[layer - 1], num_units, bias=not batch_norm)))
-                fc_out.append(('tanh%d' % layer, nn.Hardtanh(-20, 20)))
+                    fc_out.append(('linear%d' % layer, nn.Linear(fc_size[layer - 1], num_units, bias=not batch_norm)))
+                    fc_out.append(('tanh%d' % layer, nn.Hardtanh(-20, 20)))
 
-            # if dropout > 0:
-            #     fc_out.append(('output dropout', nn.Dropout(dropout)))
             fc_out.append(('linear', nn.Linear(fc_size[-1], num_classes, bias=not batch_norm)))
             fully_connected = nn.Sequential(OrderedDict(fc_out))
 
