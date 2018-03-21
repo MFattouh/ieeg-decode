@@ -5,21 +5,100 @@ from mat73_to_pickle import recursive_dict
 import os
 import scipy.signal
 import sys
+from glob import glob
 
 
-def read_day(day_path):
+def read_dataset_dir(dataset_path):
+    # takes the path to the dataset and returns a dict. of lists, where for each subject a list contains the file names
+    # (without extention) of all recordings is added to the dictionary.
+    files = glob(dataset_path + '/*_header.mat')
+
+    subject_pathes = dict()
+    for file in files:
+        if len(file.split('_')) > 1:
+            subject_id = file.split('_')[-3]
+            if subject_id in subject_pathes:
+                subject_pathes[subject_id].append((os.path.join(dataset_path, '_'.join(file.split('_')[:-1]))))
+            else:
+                subject_pathes[subject_id] = [os.path.join(dataset_path, '_'.join(file.split('_')[:-1]))]
+
+    return subject_pathes
+
+
+def extract_names_from_header(header_path):
+    # takes a header file path, read it and return the names of valid ecog-grid and seeg signals
+    try:
+        header = sio.loadmat(header_path)['H']['channels']
+    except NotImplementedError:
+        f = h5py.File(header_path, mode='r')
+        header = recursive_dict(f['H/channels'])
+
+    signalType = header['signalType']
+    ecog_channels_idx = np.chararray.find(np.chararray.lower(signalType), 'ecog-grid') != -1
+    seeg_channels_idx = np.chararray.find(np.chararray.lower(signalType), 'seeg') != -1
+    soi_idx = np.bitwise_or(ecog_channels_idx, seeg_channels_idx)
+    if np.all(soi_idx == False):
+        raise KeyError('No ECoG-Grid or SEEG electrods found')
+    if 'seizureOnset' in header:
+        soz = header['seizureOnset']
+    else:
+        soz = np.zeros((soi_idx.shape[-1], 1))
+    valid = soz == 0
+    if 'rejected' in header:
+        rejected = header['rejected']
+        not_rejected = np.array([np.all(rejected[idx] == 0) for idx in range(len(rejected))])
+        valid = np.bitwise_and(valid, not_rejected)
+
+    soi_idx = np.bitwise_and(soi_idx, valid)
+    return header['name'][soi_idx]
+
+
+def extract_common_names(headers):
+    # takes headers for the same subject and return the name of channels (ecog-grid + seeg) that are valid and available
+    # in all recordings
+    # we start by first header and
+    signal_names = extract_names_from_header(headers[0] + '_header.mat')
+    common_signals = set(signal_names)
+    for header in headers[1:]:
+        signal_names = extract_names_from_header(header + '_header.mat')
+        common_signals = common_signals & set(signal_names)
+
+    return list(common_signals)
+
+
+def read_header_given_names(header_path, common_signals):
+    # reads a header file and extract the data with valid signal names
+    try:
+        header = sio.loadmat(header_path)['H']['channels']
+    except NotImplementedError:
+        f = h5py.File(header_path, mode='r')
+        header = recursive_dict(f['H/channels'])
+
+    names = np.chararray.lower(header['name'])
+    soi_idx = np.array([False]*names.shape[-1])
+    for signal_name in common_signals:
+        soi_idx = np.bitwise_or(soi_idx, np.chararray.find(names, signal_name.lower()) != -1)
+
+    if 'headboxNumber' in header:
+        ch_hbox = header['headboxNumber']
+    else:
+        ch_hbox = np.zeros_like(soi_idx)
+
+    return soi_idx, ch_hbox
+
+
+def read_day(day_path, common_signals):
     # reads a matlab header and data files and return the following
     # ch_val is a num_recordings * num_ecog_channel list of list. each value is dict with
     # 'ch_hbox' and 'val' if the channel is valid, otherwise, an empty dict.
     # ch_pos is num_ecog_channels list where each element is the MNI xyz coordinates.
     # target is list of targets for every recording session
     # srate is a list of the sampling rates for each recording session
-    relative_path = os.path.split(day_path)[-1]
-    data_path = os.path.join(day_path, 'alignedData', relative_path + '_data.mat')
-    header_path = os.path.join(day_path, 'alignedData', relative_path + '_header.mat')
+    data_path = day_path + '_data.mat'
+    header_path = day_path + '_header.mat'
 
-    ecog_channels_idx, ch_hbox = read_header(header_path)
-    ch_val, srate, game_type, target = read_raw_data(data_path, ecog_channels_idx, ch_hbox)
+    channels_idx, ch_hbox = read_header_given_names(header_path, common_signals)
+    ch_val, srate, game_type, target = read_raw_data(data_path, channels_idx, ch_hbox)
     return ch_val, target, srate, game_type
 
 
@@ -39,9 +118,9 @@ def read_raw_data(data_path, ecog_channels_idx, hbox):
         ecog_channels = recording['ampData'][ecog_channels_idx].astype(np.float32)
         # apply CAR
         ecog_channels = car(ecog_channels, hbox[ecog_channels_idx])
-        # apply high pass filtering with cut-off freq. 1.5 Hz
+        # apply high pass filtering with cut-off freq. 0.15 Hz
         srate = recording['srate'].tolist()
-        ecog_channels = highpass_filtering(ecog_channels, 1.5, srate)
+        ecog_channels = highpass_filtering(ecog_channels, 0.15, srate)
         # add to the list
         ch_val.append(ecog_channels)
         # extract raw target values
@@ -118,18 +197,47 @@ def highpass_filtering(data, cut_feq, fs):
     return scipy.signal.lfilter(b, a, data, axis=-1)
 
 
-def read_dataset_dir(dataset_path):
-    dirs = os.listdir(dataset_path)
-    subject_pathes = dict()
-    for dir in dirs:
-        if len(dir.split('_')) > 1:
-            subject_id = dir.split('_')[1]
-            if subject_id in subject_pathes:
-                subject_pathes[subject_id].append(os.path.join(dataset_path, dir))
-            else:
-                subject_pathes[subject_id] = [os.path.join(dataset_path, dir)]
+# def read_dataset_dir(dataset_path):
+#     dirs = os.listdir(dataset_path)
+#     subject_pathes = dict()
+#     for dir in dirs:
+#         if len(dir.split('_')) > 1:
+#             subject_id = dir.split('_')[1]
+#             if subject_id in subject_pathes:
+#                 subject_pathes[subject_id].append(os.path.join(dataset_path, dir))
+#             else:
+#                 subject_pathes[subject_id] = [os.path.join(dataset_path, dir)]
+#
+#     return subject_pathes
 
-    return subject_pathes
+def create_new_dataset(recording_name, output_file, file_format):
+    common_signals = extract_common_names(recording_name)
+    trial = 0
+    if file_format == 'hdf':
+        with h5py.File(output_file, 'x') as hdf:
+            for day_path in recording_name:
+                for ch_val, target, srate, game_type in zip(*read_day(day_path, common_signals)):
+                    trial += 1
+                    # create a group
+                    grp = hdf.create_group('trial%d' % trial)
+                    # create the dataset
+                    grp.create_dataset('X', data=ch_val)
+                    grp.create_dataset('y', data=target)
+                    # add the sampling rate to the attributes
+                    grp.attrs['srate'] = srate
+                    # add game type
+                    grp.attrs['gameType'] = game_type
+
+    else:
+        dataset_dict = dict()
+        for day_path in recording_name:
+            for ch_val, target, srate, game_type in zip(*read_day(day_path, common_signals)):
+                trial += 1
+                dataset_dict['trial%d' % trial] = {'X': ch_val,
+                                                   'y': target,
+                                                   'srate': srate,
+                                                   'gameType': game_type}
+        sio.savemat(output_file, dataset_dict)
 
 
 def create_dataset(input_dirs, output_file, file_format):
@@ -201,11 +309,25 @@ def main(dataset_path, extension):
             continue
 
 
+def new_main(dataset_path, extension):
+    all_subject_pathes = read_dataset_dir(dataset_path)
+    for subject_id, subject_pathes in all_subject_pathes.items():
+        subject_dataset_path = os.path.join(dataset_path, 'new_' + subject_id + extension)
+        try:
+            print('Creating dataset for subject', subject_id)
+            create_new_dataset(subject_pathes, subject_dataset_path, sys.argv[2])
+        except KeyError as e:
+            if extension == '.h5':
+                os.remove(subject_dataset_path)
+            print(e)
+            continue
+
+
 if __name__ == '__main__':
     assert len(sys.argv) > 2, 'You should pass the path to the dataset and output file format'
     assert sys.argv[2] == 'hdf' or sys.argv[2] == 'mat', sys.argv[2] + 'is not supported'
     dataset_path = sys.argv[1]
     extension = '.h5' if sys.argv[2] == 'hdf' else '.mat'
-    main(dataset_path, extension)
+    new_main(dataset_path, extension)
 
 
