@@ -53,24 +53,24 @@ def _transpose_C_to_W():
 
 def _rnn_to_bn_transpose():
     # x is expected to be TxNxH
-    return Expression(lambda x: x.permute(1, 2, 0))  # NxHxT
+    return Expression(lambda x: x.permute(1, 2, 0).contiguous())  # NxHxT
 
 
 def _rnn_to_fc_transpose():
     # x is expected to be TxNxH
     # x = x..contiguous()
-    return Expression(lambda x: x.transpose(1, 0))  # NxTxH
+    return Expression(lambda x: x.transpose(1, 0)).contiguous()  # NxTxH
 
 
 # the next two functions perform exactly the same operation. just for the sake of calrity
 def _bn_to_fc_transpose():
     # x is expected to be NxHxT
-    return Expression(lambda x: x.transpose(2, 1))  # NxTxH
+    return Expression(lambda x: x.transpose(2, 1).contiguous())  # NxTxH
 
 
 def _fc_to_bn_transpose():
     # x is expected to be NxTxH
-    return Expression(lambda x: x.transpose(2, 1))  # NxHxT
+    return Expression(lambda x: x.transpose(2, 1).contiguous())  # NxHxT
 
 
 def _expand_last():
