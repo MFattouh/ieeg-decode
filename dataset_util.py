@@ -174,10 +174,7 @@ def car(channels, hbox):
         # use only valid signals to compute mean and SD
         hb_idx = hbox == hb
         mean = np.mean(channels[hb_idx, ], dtype=np.float32)
-        std = np.std(channels[hb_idx, ], dtype=np.float32)
-        assert std != 0
         channels -= mean
-        channels /= std
 
     return channels
 
