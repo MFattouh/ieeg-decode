@@ -6,6 +6,8 @@ from torch.autograd import Variable
 from bnlstm import LSTM as BNLSTM
 from bnlstm import BNLSTMCell
 import numpy as np
+from weight_drop import WeightDrop
+
 
 supported_rnns = {
     'lstm': nn.LSTM,
@@ -123,11 +125,13 @@ class HybridModel(nn.Module):
     def make_rnn(self, batch_norm, dropout, max_length, rnn_hidden_size, rnn_input_size, rnn_layers):
         if batch_norm:
             rnns = BNLSTM(cell_class=BNLSTMCell, input_size=rnn_input_size, hidden_size=rnn_hidden_size,
-                               dropout=dropout, num_layers=rnn_layers, max_length=max_length)
+                          num_layers=rnn_layers, max_length=max_length)
         else:
-            rnns = self.rnn_type(input_size=rnn_input_size, hidden_size=rnn_hidden_size, dropout=dropout,
-                                      num_layers=rnn_layers, bidirectional=False, bias=False)
+            rnns = self.rnn_type(input_size=rnn_input_size, hidden_size=rnn_hidden_size,
+                                 num_layers=rnn_layers, bidirectional=False, bias=True)
 
+        if dropout > 0:
+            rnns = WeightDrop(rnns, dropout=dropout)
         return rnns
 
     def make_fc(self, batch_norm, dropout, fc_size, initializer, num_classes, rnn_hidden_size):
