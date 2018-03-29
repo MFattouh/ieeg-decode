@@ -369,6 +369,7 @@ def evaluate(model, data_loader, loss_fun, keep_state=False, writer=None, epoch=
         size = list(output.size())
         batch_size, seq_len, num_classes = size[0], size[1], size[2]
         avg_loss += loss_fun(output.squeeze(), target[:, -seq_len:].squeeze()).data.cpu().numpy().squeeze()
+        avg_loss /= len(data_loader.dataset)
         # compute the correlation coff. for each seq. in batch
         target = target_cpu.squeeze(0)[:, -seq_len:].numpy()
         output = output.data.cpu().numpy()
@@ -384,7 +385,7 @@ def evaluate(model, data_loader, loss_fun, keep_state=False, writer=None, epoch=
                     cum_corr[batch_idx, class_idx] += corr
                     valid_corr[batch_idx, class_idx] += 1
     if writer is not None:
-        writer.add_scalar('loss', avg_loss / len(data_loader.dataset), epoch)
+        writer.add_scalar('loss', avg_loss, epoch)
     # average the correlations across over iterations apply inverse fisher's transform find mean over batch
     if num_classes == 1:
         avg_corr = np.tanh(cum_corr.squeeze() / valid_corr.squeeze()).mean()
