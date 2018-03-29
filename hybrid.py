@@ -174,16 +174,16 @@ class HybridModel(nn.Module):
         else:
             fc_out = list()
             if batch_norm or dropout > 0:
-                fc_out.append('trans', _rnn_to_bn_transpose())
+                fc_out.append(('trans', _rnn_to_bn_transpose()))
                 if batch_norm:
-                    fc_out.append('BN', nn.BatchNorm1d(rnn_hidden_size))
+                    fc_out.append(('BN', nn.BatchNorm1d(rnn_hidden_size)))
                 if dropout > 0:
-                    fc_out.append('expand', _expand_last())
+                    fc_out.append(('expand', _expand_last()))
                     fc_out.append(('dropout', nn.Dropout2d(dropout)))
-                    fc_out.append('squeeze', _drop_last())
-                fc_out.append('detrans', _bn_to_fc_transpose())
+                    fc_out.append(('squeeze', _drop_last()))
+                fc_out.append(('detrans', _bn_to_fc_transpose()))
             else:
-                fc_out.append('trans', _rnn_to_fc_transpose())
+                fc_out.append(('trans', _rnn_to_fc_transpose()))
             fc_out.append(('output', nn.Linear(rnn_hidden_size, num_classes, bias=not batch_norm)))
             if initializer is not None:
                 initializer(fc_out[-1][1].weight)
