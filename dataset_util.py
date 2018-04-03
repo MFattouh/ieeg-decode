@@ -209,6 +209,7 @@ def highpass_filtering(data, cut_feq, fs):
 
 def create_new_dataset(recording_name, output_file, file_format):
     common_signals = extract_common_names(recording_name)
+    assert common_signals, 'No common signals found'
     trial = 0
     if file_format == 'hdf':
         with h5py.File(output_file, 'x') as hdf:
