@@ -42,7 +42,7 @@ def extract_names_from_header(header_path):
     if 'seizureOnset' in header:
         soz = header['seizureOnset']
     else:
-        soz = np.zeros((soi_idx.shape[-1], 1))
+        soz = np.zeros((soi_idx.shape[-1], 1)).squeeze()
     valid = soz == 0
     if 'rejected' in header:
         rejected = header['rejected']
@@ -77,7 +77,7 @@ def read_header_given_names(header_path, common_signals):
     names = np.chararray.lower(header['name'])
     soi_idx = np.array([False]*names.shape[-1])
     for signal_name in common_signals:
-        soi_idx = np.bitwise_or(soi_idx, np.chararray.find(names, signal_name.lower()) != -1)
+        soi_idx = np.bitwise_or(soi_idx, names == signal_name.lower())
 
     if 'headboxNumber' in header:
         ch_hbox = header['headboxNumber']
