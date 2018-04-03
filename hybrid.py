@@ -86,179 +86,172 @@ def _drop_last():
 
 
 class HybridModel(nn.Module):
-    def __init__(self, rnn_type='lstm', in_channels=64, channel_filters=[], time_filters=[], time_kernels=[],
-                 rnn_hidden_size=768, rnn_layers=5, max_length=None, fc_size=[10], num_classes=1,
-                 output_stride=0, dropout=0.1, batch_norm=False, initializer=None):
+    def __init__(self, in_channels=0, channel_conv_config=None, time_conv_config=None, rnn_config=None, fc_config=None,
+                 output_stride=0):
 
         super(HybridModel, self).__init__()
+        self._output_stride = output_stride
+        self._hidden_layers = rnn_config['num_layers']
+        self._hidden_size = rnn_config['hidden_size']
+        self.rnn_type = rnn_config['rnn_type'].lower()
+        # channels conv. layers. convolutions are done over all channels in the first layer
+        # and over all output filters in later layers.
+        if channel_conv_config is not None:
+            self.channel_conv = self.make_channels_conv(in_channels, **channel_conv_config)
+        else:
+            self.channel_conv = None
+        # convolution layers over time dimension only
+        if time_conv_config is not None:
+            self.time_conv = self.make_time_convs(**time_conv_config)
+        else:
+            self.time_conv = None
+
+        rnn_input_size = channel_conv_config['channel_filters'][-1] if self.channel_conv is not None else in_channels
+        rnn_input_size = rnn_input_size * time_conv_config['time_filters'][-1] if self.time_conv is not None\
+            else rnn_input_size
+
+        self.rnns = self.make_rnn(rnn_input_size, **rnn_config)
+
+        self.fc = self.make_fc(rnn_config['hidden_size'], **fc_config)
+
+    def make_rnn(self, input_size=0, rnn_type='lstm', batch_norm=False, dropout=0, weights_dropout=[], max_length=0,
+                 hidden_size=10,
+                 num_layers=1):
         assert rnn_type.lower() in supported_rnns, 'unknown recurrent type'+rnn_type
         if batch_norm:
             assert rnn_type.lower() == 'lstm', 'Recurrent Batch Normalization is currently not supported for '+rnn_type
             assert max_length > 0, 'a valid max length required to with batch normalization'
-
-        # model metadata
-        self._version = '0.0.1'
-        self._hidden_size = rnn_hidden_size
-        self._hidden_layers = rnn_layers
-        self.rnn_type = supported_rnns[rnn_type.lower()]
-        self._linear_hidden_size = fc_size
-        self._output_stride = output_stride
-        self._in_1d_filters = channel_filters
-        self._in_2d_filters = time_filters
-        self._in_2d_kernels = time_kernels
-        self._bn = batch_norm
-        self._dropout = dropout
-
-        rnn_input_size = channel_filters[-1] if channel_filters else in_channels
-        rnn_input_size = rnn_input_size * time_filters[-1] if time_filters else rnn_input_size
-        # channels conv. layers. convolutions are done over all channels in the first layer
-        # and over all output filters in later layers.
-        self.channel_conv = self.make_channels_conv(batch_norm, channel_filters, in_channels, initializer, time_filters)
-
-        # convolution layers over time dimension only
-        self.time_conv = self.make_time_convs(batch_norm, initializer, time_filters, time_kernels)
-
-        self.rnns = self.make_rnn(batch_norm, dropout, max_length, rnn_hidden_size, rnn_input_size, rnn_layers)
-
-        self.fc = self.make_fc(batch_norm, dropout, fc_size, initializer, num_classes, rnn_hidden_size)
-
-    def make_rnn(self, batch_norm, dropout, max_length, rnn_hidden_size, rnn_input_size, rnn_layers):
         if batch_norm:
-            rnns = BNLSTM(cell_class=BNLSTMCell, input_size=rnn_input_size, hidden_size=rnn_hidden_size,
-                          num_layers=rnn_layers, max_length=max_length)
+            rnns = BNLSTM(cell_class=BNLSTMCell, input_size=input_size, hidden_size=hidden_size,
+                          num_layers=num_layers, max_length=max_length)
         else:
-            rnns = self.rnn_type(input_size=rnn_input_size, hidden_size=rnn_hidden_size,
-                                 num_layers=rnn_layers, bidirectional=False, bias=True)
+            rnns = supported_rnns[rnn_type](input_size=input_size, hidden_size=hidden_size,
+                            num_layers=num_layers, bidirectional=False, bias=True)
 
-        if dropout > 0:
-            rnns = WeightDrop(rnns, dropout=dropout)
+            if dropout > 0 and weights_dropout:
+                rnns = WeightDrop(rnns, weights=weights_dropout, dropout=dropout)
+
         return rnns
 
-    def make_fc(self, batch_norm, dropout, fc_size, initializer, num_classes, rnn_hidden_size):
+    def make_fc(self, input_size=0, num_classes=1, batch_norm=[], dropout=[], fc_size=[], initializer=None,
+                activations=[]):
         if fc_size:
             fc_out = list()
-            if batch_norm or dropout > 0:
+            if batch_norm[0] or dropout[0] > 0:
                 fc_out.append(('trans01', _rnn_to_bn_transpose()))
-                if batch_norm:
-                    fc_out.append(('BN0', nn.BatchNorm1d(rnn_hidden_size)))
-                if dropout > 0:
+                if batch_norm[0]:
+                    fc_out.append(('BN0', nn.BatchNorm1d(input_size)))
+                if dropout[0] > 0:
                     fc_out.append(('expand0', _expand_last()))
-                    fc_out.append(('dropout0', nn.Dropout2d(dropout)))
+                    fc_out.append(('dropout0', nn.Dropout2d(dropout[0])))
                     fc_out.append(('squeeze0', _drop_last()))
                 fc_out.append(('trans02', _bn_to_fc_transpose()))
             else:
                 fc_out.append(('trans0', _rnn_to_fc_transpose()))
 
-            fc_out.append(('linear0', nn.Linear(rnn_hidden_size, fc_size[0], bias=not batch_norm)))
+            fc_out.append(('linear0', nn.Linear(input_size, fc_size[0], bias=not batch_norm[0])))
             if initializer is not None:
                 initializer(fc_out[-1][1].weight)
-            fc_out.append(('tanh0', nn.Hardtanh(-20, 20)))
+            fc_out.append(('activation0', activations[0]))
             if len(fc_size) > 1:
-                for layer, num_units in enumerate(fc_size[1:], 1):
-                    if batch_norm or dropout > 0:
+                for layer, (num_units, activation, bn, do) in \
+                        enumerate(zip(fc_size[1:], activations[1:], batch_norm[1:], dropout[1:]), 1):
+                    if bn or do > 0:
                         fc_out.append(('trans%d1' % layer, _fc_to_bn_transpose()))
-                        if batch_norm:
-                            fc_out.append(('BN%d' % layer, nn.BatchNorm1d(rnn_hidden_size)))
-                        if dropout > 0:
+                        if bn:
+                            fc_out.append(('BN%d' % layer, nn.BatchNorm1d(fc_size[layer-1])))
+                        if do > 0:
                             fc_out.append(('expand%d' % layer, _expand_last()))
-                            fc_out.append(('dropout%d' % layer, nn.Dropout2d(dropout)))
+                            fc_out.append(('dropout%d' % layer, nn.Dropout2d(do)))
                             fc_out.append(('squeeze%d' % layer, _drop_last()))
                         fc_out.append(('trans%d2' % layer, _bn_to_fc_transpose()))
 
-                    fc_out.append(('linear%d' % layer, nn.Linear(fc_size[layer - 1], num_units, bias=not batch_norm)))
+                    fc_out.append(('linear%d' % layer, nn.Linear(fc_size[layer - 1], num_units, bias=not bn)))
                     if initializer is not None:
                         initializer(fc_out[-1][1].weight)
-                    fc_out.append(('tanh%d' % layer, nn.Hardtanh(-20, 20)))
+                    fc_out.append(('activation%d' % layer, activation))
 
-            fc_out.append(('linear', nn.Linear(fc_size[-1], num_classes, bias=not batch_norm)))
+            fc_out.append(('linear', nn.Linear(fc_size[-1], num_classes, bias=False)))
             if initializer is not None:
                 initializer(fc_out[-1][1].weight)
             fully_connected = nn.Sequential(OrderedDict(fc_out))
 
         else:
             fc_out = list()
-            if batch_norm or dropout > 0:
+            if batch_norm[0] or dropout[0] > 0:
                 fc_out.append(('trans', _rnn_to_bn_transpose()))
-                if batch_norm:
-                    fc_out.append(('BN', nn.BatchNorm1d(rnn_hidden_size)))
-                if dropout > 0:
+                if batch_norm[0]:
+                    fc_out.append(('BN', nn.BatchNorm1d(input_size)))
+                if dropout[0] > 0:
                     fc_out.append(('expand', _expand_last()))
-                    fc_out.append(('dropout', nn.Dropout2d(dropout)))
+                    fc_out.append(('dropout', nn.Dropout2d(dropout[0])))
                     fc_out.append(('squeeze', _drop_last()))
                 fc_out.append(('detrans', _bn_to_fc_transpose()))
             else:
                 fc_out.append(('trans', _rnn_to_fc_transpose()))
-            fc_out.append(('output', nn.Linear(rnn_hidden_size, num_classes, bias=not batch_norm)))
+            fc_out.append(('output', nn.Linear(input_size, num_classes, bias=not batch_norm[0])))
             if initializer is not None:
                 initializer(fc_out[-1][1].weight)
             fully_connected = nn.Sequential(OrderedDict(fc_out))
 
         return fully_connected
 
-    def make_time_convs(self, batch_norm, initializer, time_filters, time_kernels):
-        if time_filters:
-            time_conv = list()
-            time_conv.append(('conv0', nn.Conv2d(1, time_filters[0], kernel_size=(1, time_kernels[0]),
-                                                 bias=not batch_norm)))
+    def make_time_convs(self, batch_norm=[], initializer=None, time_filters=[], time_kernels=[], activations=[]):
+        assert len(time_filters) == len(time_kernels) == len(activations) == len(batch_norm)
+        time_conv = list()
+        time_conv.append(('conv0', nn.Conv2d(1, time_filters[0], kernel_size=(1, time_kernels[0]),
+                                             bias=not batch_norm[0])))
+        if initializer is not None:
+            initializer(time_conv[-1][1].weight)
+        time_conv.append(('activation0', activations[0]))
+        if batch_norm[0]:
+            time_conv.append(('BN0', nn.BatchNorm2d(time_filters[0])))
+        for layer, (num_filters, kernel, activation, bn) in \
+                enumerate(zip(time_filters[1:], time_kernels[1:], activations[1:], batch_norm[1:]), 1):
+            time_conv.append(('conv%d' % layer, nn.Conv2d(time_filters[layer - 1], num_filters,
+                                                          kernel_size=(1, kernel), bias=not bn)))
             if initializer is not None:
                 initializer(time_conv[-1][1].weight)
-            if batch_norm:
-                time_conv.append(('BN0', nn.BatchNorm2d(time_filters[0])))
-            time_conv.append(('tanh0', nn.Hardtanh(0, 20, inplace=True)))
-            for x in range(1, len(time_filters)):
-                time_conv.append(('conv%d' % x, nn.Conv2d(time_filters[x - 1], time_filters[x],
-                                                          kernel_size=(1, time_kernels[x]), bias=not batch_norm)))
-                if initializer is not None:
-                    initializer(time_conv[-1][1].weight)
-                if batch_norm:
-                    time_conv.append(('BN%d' % x, nn.BatchNorm2d(time_filters[x])))
-                time_conv.append(('tanh%d' % x, nn.Hardtanh(0, 20, inplace=True)))
+            time_conv.append(('activation%d' % layer, activation))
+            if bn:
+                time_conv.append(('BN%d' % layer, nn.BatchNorm2d(num_filters)))
 
-            # remove last batch normalization layer since the bnlstm will do it
-            if batch_norm:
-                time_conv = time_conv[:-1]
-            time_conv = nn.Sequential(OrderedDict(time_conv))
-        else:
-            time_conv = None
-
+        time_conv = nn.Sequential(OrderedDict(time_conv))
         return time_conv
 
-    def make_channels_conv(self, batch_norm, channel_filters, in_channels, initializer, time_filters):
-        if channel_filters:
-            channels_conv = list()
-            channels_conv.append(('conv0', nn.Conv2d(1, channel_filters[0], kernel_size=(in_channels, 1),
-                                                     bias=not batch_norm)))
-            if initializer is not None:
-                initializer(channels_conv[-1][1].weight)
-            channels_conv.append(('tanh0', nn.Hardtanh(0, 20, inplace=True)))
-            if batch_norm:
-                channels_conv.append(('BN0', nn.BatchNorm2d(channel_filters[0])))
-            if len(channel_filters) > 1:
-                for layer, num_filters in enumerate(channel_filters[1:], 1):
-                    channels_conv.append(('trans%d1' % layer, _transpose_C_to_W()))
-                    channels_conv.append(('conv%d' % layer, nn.Conv2d(1, num_filters,
-                                                                      kernel_size=(channel_filters[layer - 1], 1),
-                                                                      bias=not batch_norm)))
-                    if initializer is not None:
-                        initializer(channels_conv[-1][1].weight)
-                    channels_conv.append(('tanh%d' % layer, nn.Hardtanh(0, 20, inplace=True)))
-                    if batch_norm:
-                        channels_conv.append(('BN%d' % layer, nn.BatchNorm2d(num_filters)))
-                    channels_conv.append(('trans%d2' % layer, _transpose_C_to_W()))
-            else:
-                channels_conv.append(('trans0', _transpose_C_to_W()))
-
-            # no need for batch normalization if output fed to the rnn directly since will be done on rnn input
-            if batch_norm and not time_filters:
-                channels_conv = channels_conv[:-1]
-            channel_conv = nn.Sequential(OrderedDict(channels_conv))
+    def make_channels_conv(self, in_channels=0, batch_norm=[], channel_filters=[], initializer=None, activations=[]):
+        assert len(channel_filters) == len(activations) == len(batch_norm)
+        channels_conv = list()
+        channels_conv.append(('conv0', nn.Conv2d(1, channel_filters[0], kernel_size=(in_channels, 1),
+                                                 bias=not batch_norm[0])))
+        if initializer is not None:
+            initializer(channels_conv[-1][1].weight)
+        channels_conv.append(('activation0', activations[0]))
+        if batch_norm[0]:
+            channels_conv.append(('BN0', nn.BatchNorm2d(channel_filters[0])))
+        if len(channel_filters) > 1:
+            for layer, (num_filters, activation, bn) in \
+                    enumerate(zip(channel_filters[1:], activations[1:], batch_norm[1:]), 1):
+                channels_conv.append(('trans%d1' % layer, _transpose_C_to_W()))
+                channels_conv.append(('conv%d' % layer, nn.Conv2d(1, num_filters,
+                                                                  kernel_size=(channel_filters[layer - 1], 1),
+                                                                  bias=not batch_norm)))
+                if initializer is not None:
+                    initializer(channels_conv[-1][1].weight)
+                channels_conv.append(('activation%d' % layer, activation))
+                if bn:
+                    channels_conv.append(('BN%d' % layer, nn.BatchNorm2d(num_filters)))
+                channels_conv.append(('trans%d2' % layer, _transpose_C_to_W()))
         else:
-            channel_conv = None
+            channels_conv.append(('trans0', _transpose_C_to_W()))
+
+        channel_conv = nn.Sequential(OrderedDict(channels_conv))
+
         return channel_conv
 
     def init_hidden(self, batch_size):
         hidden = Variable(torch.zeros(self._hidden_layers, batch_size, self._hidden_size))
-        if self.rnn_type == nn.LSTM:
+        if self.rnn_type == 'lstm':
             return hidden, hidden
         else:
             return hidden
