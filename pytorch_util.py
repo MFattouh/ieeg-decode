@@ -2,7 +2,12 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torch.autograd import Variable
+from braindecode.datautil.signalproc import exponential_running_standardize
+from sklearn.preprocessing import MinMaxScaler
 
+def weighted_mse(input, target, weight):
+    return torch.mean(weight * ((input - target) ** 2).sum(dim=0))
+    
 
 def load_trial(dataset_file, trial, full_load=True):
     trial = dataset_file[trial]
@@ -43,12 +48,52 @@ class ECoGDatast(Dataset):
         return X, y
 
 
+def crops_from_trial(X, y, srate, crop_len, num_crops=0, time_last=True, normalize=True):
+    num_samples_per_trial = int(crop_len * srate)
+    x_list, y_list = list(), list()
+    if num_crops > 0:
+        num_valid_crops = num_crops
+    else:
+        num_valid_crops = int((X.shape[0] / srate) // crop_len)
+    for crop in range(num_valid_crops):
+        if num_crops > 0:
+            crop_idx = np.random.randint(0, X.shape[0]-num_samples_per_trial)
+        else:
+            crop_idx = crop * num_samples_per_trial
+            
+        x_crop = X[crop_idx:crop_idx + num_samples_per_trial,]
+        y_crop = y[crop_idx:crop_idx + num_samples_per_trial,]
+        if normalize:
+                y_crop = MinMaxScaler().fit_transform(y_crop.reshape(-1, 1)).squeeze()
+                x_crop = exponential_running_standardize(x_crop, init_block_size=250, factor_new=0.001, eps=1e-4)
+        
+        x_list.append(x_crop.T.astype(np.float32) if time_last else x_crop.astype(np.float32))
+        y_list.append(y_crop.astype(np.float32))
+
+    return x_list, y_list
+
+
+class ConcatCrops(Dataset):
+    def __init__(self, x_crops, y_crops):
+        assert len(x_crops) == len(y_crops)
+        self._x_crops = x_crops
+        self._y_crops = y_crops
+        super(ConcatCrops, self).__init__()
+
+    def __len__(self):
+        return len(self._x_crops)
+
+    def __getitem__(self, idx):
+        return np.expand_dims(self._x_crops[idx], axis=0), np.expand_dims(self._y_crops[idx], axis=1)
+
+
 class ConcatDataset(Dataset):
     def __init__(self, datasets, batch_first=False, time_last=False):
         self._len = min([len(dataset) for dataset in datasets])
         self.datasets = list(datasets)
         self.batch_first = batch_first
         self.time_last = time_last
+        super(ConcatCrops, self).__init__()
 
     def __len__(self):
         return self._len
