@@ -249,14 +249,7 @@ class HybridModel(nn.Module):
 
         return channel_conv
 
-    def init_hidden(self, batch_size):
-        hidden = Variable(torch.zeros(self._hidden_layers, batch_size, self._hidden_size))
-        if self.rnn_type == 'lstm':
-            return hidden, hidden
-        else:
-            return hidden
-
-    def forward(self, x, hidden):
+    def forward(self, x, hidden=None):
         # x is expected to be Nx1xCxT
         if self.channel_conv is not None:
             x = self.channel_conv(x)   # NxCx1xT
@@ -266,14 +259,17 @@ class HybridModel(nn.Module):
         sizes = x.size()
         x = x.view(sizes[0], sizes[1] * sizes[2], sizes[3])  # Collapse feature dimension
         x = x.transpose(1, 2).transpose(0, 1).contiguous()   # TxNxC
-        x, hidden = self.rnns(x, hidden)  # TxNxH
+        x, out_hidden = self.rnns(x, hidden)  # TxNxH
 
         if self._output_stride > 1:
             x = x[self._output_stride-1::self._output_stride]
 
-        x = self.fc(x)  # NxTxH
+        x = self.fc(x).squeeze()  # NxTxH
 
-        return x, hidden  # N x T x nClasses
+        if hidden is not None:
+            return x, out_hidden  # N x T x nClasses
+        else:
+            return x
 
     @staticmethod
     def get_param_size(model):
@@ -289,40 +285,29 @@ class HybridModel(nn.Module):
        pass
 
 
-def train(model, data_loader, optimizer, loss_fun, weights, keep_state=False, clip=0, cuda=False):
+def train(model, data_loader, optimizer, loss_fun, keep_state=False, clip=0, cuda=False):
     model.train()
-    weights = Variable(torch.from_numpy(weights))
-    if cuda:
-        weights = weights.cuda()
     for itr, (data, target_cpu) in enumerate(data_loader):
         # data, target = Variable(data.transpose(1, 0)), Variable(target_cpu.squeeze(0))
         data, target = Variable(data), Variable(target_cpu.squeeze(0))
         if cuda:
             data, target = data.cuda(), target.cuda()
 
-        batch_size = list(data.size())[0]
-        if itr == 0 or not keep_state:
-            hidden = model.init_hidden(batch_size)
-            if cuda:
-                if model.rnn_type == 'lstm':
-                    hidden = tuple([h.cuda() for h in hidden])
-                else:
-                    hidden = hidden.cuda()
-
+        optimizer.zero_grad()
         # detach to stop back-propagation to older state
-        elif keep_state:
+        if keep_state:
             if model.rnn_type == 'lstm':
                 for h in hidden:
                     h.detach_()
             else:
                 hidden.detach_()
 
-        optimizer.zero_grad()
-        output, hidden = model(data, hidden)  # NxTxnum_classes
+            output, hidden = model(data, hidden)  # NxTxnum_classes
+
+        else:
+            output = model(data)
         seq_len = output.size()[1]
-        # seq_len = int(seq_len/2
-        output = output[:,-seq_len:,:]
-        loss = loss_fun(output.squeeze(), target[:, -seq_len:].squeeze(), weights)
+        loss = loss_fun(output.squeeze(), target[:, -seq_len:].squeeze())
         loss.backward()
         if clip > 0:
             torch.nn.utils.clip_grad_norm(model.parameters(), clip)
@@ -330,12 +315,9 @@ def train(model, data_loader, optimizer, loss_fun, weights, keep_state=False, cl
         optimizer.step()
 
 
-def evaluate(model, data_loader, loss_fun, weights, keep_state=False, writer=None, epoch=0, cuda=False):
+def evaluate(model, data_loader, loss_fun, metric, keep_state=False, writer=None, epoch=0, cuda=False):
     model.eval()
-    weights_tensor = Variable(torch.from_numpy(weights))
-    if cuda:
-        weights_tensor = weights_tensor.cuda() 
-            
+
     # loop over the dataset
     avg_loss = 0
     for itr, (data, target_cpu) in enumerate(data_loader):
@@ -344,42 +326,38 @@ def evaluate(model, data_loader, loss_fun, weights, keep_state=False, writer=Non
         if cuda:
             data, target = data.cuda(), target.cuda()
 
-        batch_size = list(data.size())[0]
-        if itr == 0 or not keep_state:
-            hidden = model.init_hidden(batch_size)
-            if cuda:
-                if model.rnn_type == 'lstm':
-                    hidden = tuple([h.cuda() for h in hidden])
-                else:
-                    hidden = hidden.cuda()
-
-        elif keep_state:
+        if keep_state:
             if model.rnn_type == 'lstm':
                 for h in hidden:
                     h.detach_()
             else:
                 hidden.detach_()
-        output, hidden = model(data, hidden)  # NxTxnum_classes
-        
+            output, hidden = model(data, hidden)  # NxTxnum_classes
+        else:
+            output = model(data)
 
-        size = list(output.size())
-        batch_size, seq_len, num_classes = size[0], size[1], size[2]
-        # seq_len = int(seq_len/2)
-        output = output[:,-seq_len:,:]
-        avg_loss += loss_fun(output.squeeze(), target[:, -seq_len:].squeeze(), weights_tensor).data.cpu().numpy().squeeze()
+        output_size = list(output.squeeze().size())
+        batch_size, seq_len = output_size[0], output_size[1]
+        num_classes = output_size[2] if len(output_size) > 2 else 1
+        avg_loss += loss_fun(output.squeeze(), target[:, -seq_len:].squeeze()).data.cpu().numpy().squeeze()
         # compute the correlation coff. for each seq. in batch
         target = target_cpu[:, -seq_len:].numpy()
         output = output.data.cpu().numpy()
         if itr == 0:
             cum_corr = np.zeros((num_classes, 1))
             valid_corr = np.zeros((num_classes, 1))
-        for class_idx in range(num_classes):
-            # compute correlation, apply fisher's transform
-            corr = np.arctanh(np.corrcoef((target[:, :, class_idx] * weights).reshape(1, -1).squeeze(),
-                                          (output[:, :, class_idx] * weights).reshape(1, -1).squeeze())[0, 1])
+        if num_classes == 1:
+            corr = np.arctanh(metric(target[:, :], output[:, :]))
             if not np.isnan(corr):
-                cum_corr[class_idx] += corr
-                valid_corr[class_idx] += 1
+                cum_corr[0] += corr
+                valid_corr[0] += 1
+        else:
+            for class_idx in range(num_classes):
+                # compute correlation, apply fisher's transform
+                corr = np.arctanh(metric(target[:, :, class_idx], output[:, :, class_idx]))
+                if not np.isnan(corr):
+                    cum_corr[class_idx] += corr
+                    valid_corr[class_idx] += 1
 
     if keep_state:
         avg_loss /= len(data_loader.dataset)
