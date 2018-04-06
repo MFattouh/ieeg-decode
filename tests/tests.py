@@ -1,9 +1,10 @@
-from pytorch_util import *
-from seq2seq import *
-from hybrid import *
+from utils.pytorch_util import *
+from models.seq2seq import *
+from models.hybrid import *
 import unittest
 import numpy as np
 from torch.utils.data import DataLoader
+
 
 class TestECoGDataSet(unittest.TestCase):
     def test_length(self):
@@ -17,7 +18,7 @@ class TestECoGDataSet(unittest.TestCase):
         dataset = ECoGDatast(X, y, window=40, stride=40)
         x_last, y_last = dataset.__getitem__(1)
         np.testing.assert_array_equal(x_last, np.arange(40, 80, dtype=np.float32), "wrong x returned")
-        np.testing.assert_array_equal(y_last, np.arange(40, 80, dtype=np.float32)+20, "wrong y returned")
+        np.testing.assert_array_equal(y_last, np.arange(40, 80, dtype=np.float32).reshape(-1, 1)+20, "wrong y returned")
 
     def test_test_x2yratio(self):
         X = np.arange(115)
@@ -35,7 +36,7 @@ class TestECoGDataSet(unittest.TestCase):
         self.assertEqual(len(dataset), 2, "expected 2 indices")
         x_last, y_last = dataset.__getitem__(1)
         np.testing.assert_array_equal(x_last, np.arange(40, 120, dtype=np.float32), "wrong x returned")
-        np.testing.assert_array_equal(y_last, np.array([1, 2]), "wrong y returned")
+        np.testing.assert_array_equal(y_last, np.array([1, 2]).reshape(-1, 1), "wrong y returned")
 
 
 class TestConcatDataset(unittest.TestCase):
@@ -72,12 +73,15 @@ class TestConcatDataset(unittest.TestCase):
         stride = 40
         window = 40
         X1 = np.random.rand(n_samples, n_channels)
-        y1 = X1[:,0] + 0.1
+        y1 = X1[:, 0] + 0.1
         dataset1 = ECoGDatast(X1, y1, window=window, stride=stride)
         X2 = np.random.rand(n_samples, n_channels)
-        y2 = X2[:,0] + 0.1
+        y2 = X2[:, 0] + 0.1
         dataset2 = ECoGDatast(X2, y2, window=window, stride=stride)
         manual_concat_X = np.concatenate((np.expand_dims(X1, 0), np.expand_dims(X2, 0)), axis=0)
+        # y1 and y2 will be expanded by the ECoDDataset getindex method
+        y1 = np.expand_dims(y1, axis=1)
+        y2 = np.expand_dims(y2, axis=1)
         manual_concat_y = np.concatenate((np.expand_dims(y1, 0), np.expand_dims(y2, 0)), axis=0)
         conc_dataset = ConcatDataset([dataset1, dataset2], batch_first=True, time_last=False)
         dataset_loader = iter(DataLoader(conc_dataset, batch_size=1, shuffle=False, num_workers=0))
@@ -90,6 +94,7 @@ class TestConcatDataset(unittest.TestCase):
             np.testing.assert_almost_equal(batch_y.numpy().squeeze(0),
                                            manual_concat_y[:, idx*stride:idx*stride+window],
                                            err_msg='batch %d ys did not match' % idx)
+
 
 class TestEncoderRNN(unittest.TestCase):
     def test_output_size(self):
@@ -118,10 +123,10 @@ class TestHybridModel(unittest.TestCase):
         model = HybridModel(rnn_type='lstm', num_classes=1, rnn_hidden_size=hidden_size, rnn_layers=n_layers,
                             in_channels=in_channels,
                             channel_filters=[], time_filters=[], time_kernels=[], fc_size=[10],
-                            output_stride=0, batch_norm=True, max_length=window, dropout=0.1)
+                            output_stride=0, batch_norm=False, max_length=window, dropout=0.1)
 
         hidden = model.init_hidden(batch_size)
-        dummy_input = Variable(torch.randn(batch_size, in_channels, window))
+        dummy_input = Variable(torch.randn(batch_size, 1, in_channels, window))
         dummy_output, hidden = model(dummy_input, hidden)
         print(dummy_output.size())
 
@@ -148,6 +153,30 @@ class TestHybridModel(unittest.TestCase):
 #                                                                                      decoder_hidden, encoder_outputs)
 #         print(decoder_output.size(), decoder_hidden.size(), decoder_attn.size())
 #         decoder_attns[i] = decoder_attn.squeeze(1).cpu().data
+
+
+class TestCropsFromTrials(unittest.TestCase):
+    def setUp(self):
+        self.X = np.arange(115).squeeze()
+        self.y = self.X.copy()
+        self.crop_len = 30  # samples
+
+    def test_no_strie(self):
+        X_crops, y_crops = crops_from_trial(self.X, self.y, self.crop_len, normalize=False)
+        self.assertEqual(len(X_crops), len(y_crops), 'should have the same number of crops')
+        self.assertEqual(len(X_crops), 3, 'Should be exactly 3')
+        for idx, (X_crop, y_crop) in enumerate(zip(X_crops, y_crops)):
+            np.testing.assert_array_equal(self.X[idx*self.crop_len:(idx+1)*self.crop_len], X_crop, 'crop %d did not match'%idx)
+            np.testing.assert_array_equal(self.y[idx*self.crop_len:(idx+1)*self.crop_len], y_crop, 'crop %d did not match'%idx)
+
+    def test_strid(self):
+        stride = 20
+        X_crops, y_crops = crops_from_trial(self.X, self.y, self.crop_len, stride=stride, normalize=False)
+        self.assertEqual(len(X_crops), len(y_crops), 'should have the same number of crops')
+        self.assertEqual(5, len(X_crops), 'Should be exactly 5')
+        for idx, (X_crop, y_crop) in enumerate(zip(X_crops, y_crops)):
+            np.testing.assert_array_equal(self.X[idx*stride:idx*stride + self.crop_len], X_crop, 'crop %d did not match'%idx)
+            np.testing.assert_array_equal(self.y[idx*stride:idx*stride + self.crop_len], y_crop, 'crop %d did not match'%idx)
 
 
 if __name__ == '__main__':

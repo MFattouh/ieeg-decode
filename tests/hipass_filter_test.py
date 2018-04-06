@@ -1,8 +1,8 @@
-from dataset_util import highpass_filtering
+from utils.dataset_util import highpass_filtering
 import numpy as np
 import matplotlib.pyplot as plt
 
-fs = 1000
+fs = 2500
 T = 2
 nsamples = T * fs
 t = np.linspace(0, T, nsamples, endpoint=False)
