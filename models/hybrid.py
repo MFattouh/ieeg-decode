@@ -3,10 +3,10 @@ from collections import OrderedDict
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
-from bnlstm import LSTM as BNLSTM
-from bnlstm import BNLSTMCell
+from models.bnlstm import LSTM as BNLSTM
+from models.bnlstm import BNLSTMCell
 import numpy as np
-from weight_drop import WeightDrop
+from models.weight_drop import WeightDrop
 
 
 supported_rnns = {

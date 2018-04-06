@@ -1,7 +1,7 @@
 import scipy.io as sio
 import h5py
 import numpy as np
-from mat73_to_pickle import recursive_dict
+from utils.mat73_to_pickle import recursive_dict
 import os
 import scipy.signal
 import sys
