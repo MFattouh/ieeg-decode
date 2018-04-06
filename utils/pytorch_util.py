@@ -63,6 +63,7 @@ class CorrCoeff:
 
 
 def crops_from_trial(X, y, crop_len, stride=0, time_last=True, dummy_idx=0, normalize=True):
+    crop_len = int(crop_len)
     x_list, y_list = list(), list()
     if stride > 0:
         num_valid_crops = int((X.shape[0] - crop_len) / stride) + 1
@@ -71,9 +72,9 @@ def crops_from_trial(X, y, crop_len, stride=0, time_last=True, dummy_idx=0, norm
 
     for crop in range(num_valid_crops):
         if stride > 0:
-            crop_idx = crop * stride
+            crop_idx = int(crop * stride)
         else:
-            crop_idx = crop * crop_len
+            crop_idx = int(crop * crop_len)
             
         x_crop = X[crop_idx:crop_idx + crop_len, ]
         y_crop = y[crop_idx:crop_idx + crop_len, ]
