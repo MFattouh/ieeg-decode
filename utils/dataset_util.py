@@ -73,6 +73,8 @@ def read_header_given_names(header_path, common_signals):
     except NotImplementedError:
         f = h5py.File(header_path, mode='r')
         header = recursive_dict(f['H/channels'])
+        # with h5py.File(data_path, 'r') as h5file:
+        #     data = [h5file[obj_ref] for obj_ref in h5file['D'][0]]
 
     names = np.chararray.lower(header['name'])
     soi_idx = np.array([False]*names.shape[-1])
@@ -108,6 +110,10 @@ def read_raw_data(data_path, ecog_channels_idx, hbox):
     except NotImplementedError:
         f = h5py.File(data_path, mode='r')
         data = recursive_dict(f)['D']
+        # # instad this can be handeled like this
+        # with h5py.File(data_path, 'r') as h5file:
+        #     data = [h5file[obj_ref] for obj_ref in h5file['D'][0]]
+
     ch_val = []
     targets = []
     srates= []
@@ -310,7 +316,7 @@ def main(dataset_path, extension):
 def new_main(dataset_path, extension):
     all_subject_pathes = read_dataset_dir(dataset_path)
     for subject_id, subject_pathes in all_subject_pathes.items():
-        subject_dataset_path = os.path.join(dataset_path, 'new_' + subject_id + extension)
+        subject_dataset_path = os.path.join(dataset_path, subject_id + extension)
         try:
             print('Creating dataset for subject', subject_id)
             create_new_dataset(subject_pathes, subject_dataset_path, sys.argv[2])

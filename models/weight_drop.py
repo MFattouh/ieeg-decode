@@ -1,6 +1,7 @@
+# from https://github.com/salesforce/awd-lstm-lm/blob/master/weight_drop.py
 import torch
 from torch.nn import Parameter
-from functools import wraps
+
 
 class WeightDrop(torch.nn.Module):
     def __init__(self, module, weights, dropout=0, variational=False):
@@ -45,6 +46,7 @@ class WeightDrop(torch.nn.Module):
     def forward(self, *args):
         self._setweights()
         return self.module.forward(*args)
+
 
 if __name__ == '__main__':
     import torch
