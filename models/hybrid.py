@@ -264,7 +264,7 @@ class HybridModel(nn.Module):
         if self._output_stride > 1:
             x = x[self._output_stride-1::self._output_stride]
 
-        x = self.fc(x).squeeze()  # NxTxH
+        x = self.fc(x)  # NxTxH
 
         if hidden is not None:
             return x, out_hidden  # N x T x nClasses
@@ -289,7 +289,7 @@ def train(model, data_loader, optimizer, loss_fun, keep_state=False, clip=0, cud
     model.train()
     for itr, (data, target_cpu) in enumerate(data_loader):
         # data, target = Variable(data.transpose(1, 0)), Variable(target_cpu.squeeze(0))
-        data, target = Variable(data), Variable(target_cpu.squeeze(0))
+        data, target = Variable(data), Variable(target_cpu)
         if cuda:
             data, target = data.cuda(), target.cuda()
 
@@ -306,6 +306,7 @@ def train(model, data_loader, optimizer, loss_fun, keep_state=False, clip=0, cud
 
         else:
             output = model(data)
+
         seq_len = output.size()[1]
         loss = loss_fun(output.squeeze(), target[:, -seq_len:].squeeze())
         loss.backward()
@@ -322,7 +323,7 @@ def evaluate(model, data_loader, loss_fun, metric, keep_state=False, writer=None
     avg_loss = 0
     for itr, (data, target_cpu) in enumerate(data_loader):
         # data, target = Variable(data.transpose(1, 0)), Variable(target_cpu.squeeze(0))
-        data, target = Variable(data), Variable(target_cpu.squeeze(0))
+        data, target = Variable(data), Variable(target_cpu)
         if cuda:
             data, target = data.cuda(), target.cuda()
 
@@ -336,18 +337,18 @@ def evaluate(model, data_loader, loss_fun, metric, keep_state=False, writer=None
         else:
             output = model(data)
 
-        output_size = list(output.squeeze().size())
+        output_size = list(output.size())
         batch_size, seq_len = output_size[0], output_size[1]
         num_classes = output_size[2] if len(output_size) > 2 else 1
         avg_loss += loss_fun(output.squeeze(), target[:, -seq_len:].squeeze()).data.cpu().numpy().squeeze()
         # compute the correlation coff. for each seq. in batch
-        target = target_cpu[:, -seq_len:].numpy()
-        output = output.data.cpu().numpy()
+        target = target_cpu[:, -seq_len:].numpy().squeeze()
+        output = output.data.cpu().numpy().squeeze()
         if itr == 0:
             cum_corr = np.zeros((num_classes, 1))
             valid_corr = np.zeros((num_classes, 1))
         if num_classes == 1:
-            corr = np.arctanh(metric(target[:, :], output[:, :]))
+            corr = np.arctanh(metric(target, output))
             if not np.isnan(corr):
                 cum_corr[0] += corr
                 valid_corr[0] += 1
