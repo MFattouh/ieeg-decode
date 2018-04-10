@@ -116,7 +116,7 @@ def load_trial(dataset_file, trial, full_load=True):
 
 
 class ECoGDatast(Dataset):
-    def __init__(self, X, y, window=1, stride=1, x2y_ratio=1, time_last=True, dummy_idx=0, ):
+    def __init__(self, X, y, window=1, stride=1, x2y_ratio=1, time_last=True, dummy_idx=0):
         '''
         param: X is an nd array with first dim is time axis
         y is
