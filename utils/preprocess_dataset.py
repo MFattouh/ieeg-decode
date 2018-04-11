@@ -230,8 +230,8 @@ def common_average_referencing(channels, hbox):
 def highpass_filtering(data, order, cut_feq, fs):
     # data is CxT
     z, p, k = scipy.signal.butter(order, cut_feq / (fs / 2.0), btype='highpass', output='zpk')
+    assert np.all(np.abs(p) < 1), 'unstable filter'
     sos = scipy.signal.zpk2sos(z, p, k)
-    assert np.all(p < 1), 'unstable filter'
 
     return scipy.signal.sosfiltfilt(sos, data, axis=-1)
 
@@ -239,9 +239,8 @@ def highpass_filtering(data, order, cut_feq, fs):
 def lowpass_filtering(data, order, cut_feq, fs):
     # data is CxT
     z, p, k = scipy.signal.butter(order, cut_feq / (fs / 2.0), btype='lowpass', output='zpk')
+    assert np.all(np.abs(p) < 1), 'unstable filter'
     sos = scipy.signal.zpk2sos(z, p, k)
-    # from http://stackoverflow.com/a/8812737/1469195
-    assert np.all(p < 1), 'unstable filter'
 
     return scipy.signal.sosfiltfilt(sos, data, axis=-1)
 
