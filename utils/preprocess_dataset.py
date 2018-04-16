@@ -6,6 +6,7 @@ from mat73_to_pickle import recursive_dict
 import os
 import scipy.signal
 from glob import glob
+from resampy import resample
 
 
 def read_dataset_dir(dataset_path):
@@ -16,7 +17,8 @@ def read_dataset_dir(dataset_path):
     subject_pathes = dict()
     for file_path in files:
         # check if a data file also exists
-        assert os.path.isfile(file_path.rsplit('_', 1)[0] + '_data.mat'), 'no matching data file  found for header file ' + file_path
+        assert os.path.isfile(file_path.rsplit('_', 1)[0] + '_data.mat'), \
+            'no matching data file  found for header file ' + file_path
         file_name = os.path.basename(file_path)
         if len(file_name.split('_')) > 1:
             subject_id = file_name.split('_')[-3]
@@ -34,28 +36,36 @@ def read_header(header_path):
     except NotImplementedError:
         f = h5py.File(header_path, mode='r')
         header = recursive_dict(f['H/channels'])
-
-    signalType = header['signalType']
-    ecog_channels_idx = np.chararray.find(np.chararray.lower(signalType), 'ecog-grid') != -1
-    seeg_channels_idx = np.chararray.find(np.chararray.lower(signalType), 'seeg') != -1
-    ieeg_idx = np.bitwise_or(ecog_channels_idx, seeg_channels_idx)
+    header_keys = dict([(key.lower().replace('_', '').replace('-', ''), key) for key in header.keys()])
+    signal_type = [stype.replace('_', '').replace('-', '').lower() for stype in header[header_keys['signaltype']].tolist()]
+    ecog_grid_channels_idx = [stype.find('ecoggrid') != -1 for stype in signal_type]
+    ecog_strip_channels_idx = [stype.find('ecogstrip') != -1 for stype in signal_type]
+    seeg_channels_idx = [stype.find('seeg') != -1 for stype in signal_type]
+    ieeg_idx = np.bitwise_or(np.bitwise_or(ecog_grid_channels_idx, ecog_strip_channels_idx), seeg_channels_idx)
     if np.all(ieeg_idx == False):
-        raise KeyError('No ECoG-Grid electrods found')
-    if 'seizureOnset' in header:
-        soz = header['seizureOnset']
+        raise KeyError('No ECoG-Grid, ECoG-Strip or SEEG were electrods found!')
+    if 'seizureonset' in header_keys:
+        soz = header[header_keys['seizureonset']]
+        if not np.all(soz == 0):
+            print('found soz channels')
+            print(header[header_keys['name']][soz == 1])
     else:
         soz = np.zeros((ieeg_idx.shape[-1], 1)).squeeze()
     valid = soz == 0
-    if 'rejected' in header:
-        rejected = header['rejected']
+    if 'rejected' in header_keys:
+        rejected = header[header_keys['rejected']]
         not_rejected = np.array([np.all(rejected[idx] == 0) for idx in range(len(rejected))])
+        if not np.all(not_rejected == True):
+            print('found rejected channels')
+            print(header[header_keys['name']][np.bitwise_not(not_rejected)])
         valid = np.bitwise_and(valid, not_rejected)
-    if 'headboxNumber' in header:
-        ch_hbox = header['headboxNumber']
+    if 'headboxnumber' in header_keys:
+        ch_hbox = header[header_keys['headboxnumber']]
     else:
         ch_hbox = np.zeros_like(soz)
 
     ieeg_idx = np.bitwise_and(ieeg_idx, valid)
+
     return ieeg_idx, ch_hbox[ieeg_idx]
 
 
@@ -67,24 +77,34 @@ def extract_names_from_header(header_path):
         f = h5py.File(header_path, mode='r')
         header = recursive_dict(f['H/channels'])
 
-    signalType = header['signalType']
-    ecog_channels_idx = np.chararray.find(np.chararray.lower(signalType), 'ecog-grid') != -1
-    seeg_channels_idx = np.chararray.find(np.chararray.lower(signalType), 'seeg') != -1
-    ieeg_idx = np.bitwise_or(ecog_channels_idx, seeg_channels_idx)
+    header_keys = dict([(key.lower().replace('_', '').replace('-', ''), key) for key in header.keys()])
+    signal_type = [stype.replace('_', '').replace('-', '').lower() for stype in header[header_keys['signaltype']].tolist()]
+    ecog_grid_channels_idx = [stype.find('ecoggrid') != -1 for stype in signal_type]
+    ecog_strip_channels_idx = [stype.find('ecogstrip') != -1 for stype in signal_type]
+    seeg_channels_idx = [stype.find('seeg') != -1 for stype in signal_type]
+    ieeg_idx = np.bitwise_or(np.bitwise_or(ecog_grid_channels_idx, ecog_strip_channels_idx), seeg_channels_idx)
+
     if np.all(ieeg_idx == False):
-        raise KeyError('No ECoG-Grid or SEEG electrods found')
-    if 'seizureOnset' in header:
-        soz = header['seizureOnset']
+        raise KeyError('No ECoG-Grid, ECoG-Strip or SEEG electrods found')
+    if 'seizureonset' in header_keys:
+        soz = header[header_keys['seizureonset']]
+        if not np.all(soz == 0):
+            print('found soz channels')
+            print(header[header_keys['name']][soz == 1])
     else:
         soz = np.zeros((ieeg_idx.shape[-1], 1)).squeeze()
     valid = soz == 0
-    if 'rejected' in header:
-        rejected = header['rejected']
+    if 'rejected' in header_keys:
+        rejected = header[header_keys['rejected']]
         not_rejected = np.array([np.all(rejected[idx] == 0) for idx in range(len(rejected))])
+        if not np.all(not_rejected == True):
+            print('found rejected channels')
+            print(header[header_keys['name']][np.bitwise_not(not_rejected)])
         valid = np.bitwise_and(valid, not_rejected)
+
     ieeg_idx = np.bitwise_and(ieeg_idx, valid)
 
-    return header['name'][ieeg_idx]
+    return header[header_keys['name']][ieeg_idx]
 
 
 def extract_common_names(headers):
@@ -110,31 +130,33 @@ def read_header_given_names(header_path, common_signals):
         # with h5py.File(data_path, 'r') as h5file:
         #     data = [h5file[obj_ref] for obj_ref in h5file['D'][0]]
 
-    names = np.chararray.lower(header['name'])
+    header_keys = dict([(key.lower().replace('_', '').replace('-', ''), key) for key in header.keys()])
+    names = np.chararray.lower(header[header_keys['name']])
     soi_idx = np.array([False]*names.shape[-1])
     for signal_name in common_signals:
         soi_idx = np.bitwise_or(soi_idx, names == signal_name.lower())
 
-    if 'headboxNumber' in header:
-        ch_hbox = header['headboxNumber']
+    if 'headboxnumber' in header_keys:
+        ch_hbox = header[header_keys['headboxnumber']]
     else:
         ch_hbox = np.zeros_like(soi_idx)
 
     return soi_idx, ch_hbox[soi_idx]
 
 
-def preprocess_day(data_path, header_path, common_signals, crop_len, normalize_inputs, normalize_targets, smooth_targets):
+def preprocess_day(data_path, header_path, common_signals, crop_len, normalize_inputs, normalize_targets,
+                   new_srate, smooth_targets):
     if common_signals is not None:
         channels_idx, ch_hbox = read_header_given_names(header_path, common_signals)
     else:
         channels_idx, ch_hbox = read_header(header_path)
 
-    ch_val, srate, game_type, target = read_raw_data(data_path, channels_idx, ch_hbox, crop_len, normalize_inputs,
-                                                     normalize_targets, smooth_targets)
-    return ch_val, target, srate, game_type
+    return preprocess_raw_data(data_path, channels_idx, ch_hbox, crop_len, normalize_inputs,
+                               normalize_targets, smooth_targets, new_srate)
 
 
-def read_raw_data(data_path, ieeg_channels_idx, hbox, crop_len, normalize_inputs, normalize_targets, smooth_targets):
+def preprocess_raw_data(data_path, ieeg_channels_idx, hbox, crop_len, normalize_inputs, normalize_targets, smooth_targets,
+                        new_srate):
     try:
         data = sio.loadmat(data_path)['D']
     except NotImplementedError:
@@ -147,16 +169,30 @@ def read_raw_data(data_path, ieeg_channels_idx, hbox, crop_len, normalize_inputs
     ch_val = []
     targets = []
     srates= []
-    gameType = []
-    trial = 0
     # for each recording
     for recording in data:
+        gameType = recording['gameType']
+        if gameType.lower().find('pause') != -1 or gameType.lower().find('discrete') != -1:
+            print('found game type', gameType)
+            print('will be ignored!')
+            continue
+
         srate = recording['srate'].tolist()
         # extract raw ecog-grid data
         ieeg_channels = recording['ampData'][ieeg_channels_idx].astype(np.float32)
         trial_targets = recording['tracker'].astype(np.float32)
-        ieeg_channels, trial_targets = preprocess_data(ieeg_channels, trial_targets, srate, hbox, normalize_inputs,
-                                                       normalize_targets, smooth_targets)
+
+        ieeg_channels, trial_targets = preprocessing(ieeg_channels, trial_targets, srate, hbox, normalize_inputs,
+                                                     normalize_targets, smooth_targets)
+        if new_srate > 0:
+            ieeg_channels = resample(ieeg_channels, srate, new_srate)
+            trial_targets = resample(trial_targets, srate, new_srate)
+            srate = new_srate
+
+        # remove first and last 2 seconds
+        seconds_to_remove = 2
+        ieeg_channels = ieeg_channels[:, seconds_to_remove * srate:-seconds_to_remove * srate]
+        trial_targets = trial_targets[seconds_to_remove * srate:-seconds_to_remove * srate]
         if crop_len > 0:
             num_samples_per_crop = int(crop_len * srate)
             num_valid_crops = int((ieeg_channels.shape[-1] // num_samples_per_crop))
@@ -166,8 +202,6 @@ def read_raw_data(data_path, ieeg_channels_idx, hbox, crop_len, normalize_inputs
                 ch_val.append(ieeg_crop)
                 targets.append(targets_crop)
                 srates.append(srate)
-                # append game type
-                gameType.append(str(recording['gameType']))
             # last crop
             ieeg_crop = ieeg_channels[:, (crop_idx+1)*num_samples_per_crop:]
             targets_crop = trial_targets[(crop_idx+1)*num_samples_per_crop:]
@@ -175,24 +209,19 @@ def read_raw_data(data_path, ieeg_channels_idx, hbox, crop_len, normalize_inputs
             ch_val.append(ieeg_crop)
             targets.append(targets_crop)
             srates.append(srate)
-            # append game type
-            gameType.append(str(recording['gameType']))
 
         else:
 
             ch_val.append(ieeg_channels)
             targets.append(trial_targets)
-            # append sample rate
             srates.append(srate)
-            # append game type
-            gameType.append(str(recording['gameType']))
 
     if len(ch_val) > 1:
         assert all([ch.shape[:-1] == ch_val[0].shape[:-1] for ch in ch_val[1:]])
-    return ch_val, srates, gameType, targets
+    return ch_val, targets, srates
 
 
-def preprocess_data(ieeg_channels, trial_targets, srate, hbox, normalize_inputs, normalize_targets, smooth_targets):
+def preprocessing(ieeg_channels, trial_targets, srate, hbox, normalize_inputs, normalize_targets, smooth_targets):
     # apply CAR
     ieeg_channels = common_average_referencing(ieeg_channels, hbox)
     # apply high pass filtering with cut-off freq. 0.1 Hz
@@ -246,7 +275,7 @@ def lowpass_filtering(data, order, cut_feq, fs):
 
 
 def create_grouped_dataset(dataset_path, subject_paths, output_path, file_format, crop_len, normalize_inputs,
-                           normalize_targets, smooth_targets):
+                           normalize_targets, smooth_targets, new_srate):
     if file_format == 'hdf':
         with h5py.File(output_path, 'x') as hdf:
             trial = 0
@@ -255,7 +284,7 @@ def create_grouped_dataset(dataset_path, subject_paths, output_path, file_format
                 header_path = os.path.join(dataset_path, day + '_header.mat')
                 try:
                     trial += create_hdf_dataset(hdf, data_path, header_path, crop_len, normalize_targets, smooth_targets,
-                                                start_from_trial=trial)
+                                                new_srate, start_from_trial=trial)
                 except KeyError:
                     continue
 
@@ -265,8 +294,9 @@ def create_grouped_dataset(dataset_path, subject_paths, output_path, file_format
         for day in subject_paths:
             data_path = os.path.join(dataset_path, day + '_data.mat')
             header_path = os.path.join(dataset_path, day + '_header.mat')
-            dataset_dict, num_trials = create_mat_dataset(data_path, header_path, crop_len, normalize_inputs, normalize_targets,
-                               smooth_targets, dataset_dict, start_from_trial=trial)
+            dataset_dict, num_trials = create_mat_dataset(data_path, header_path, crop_len, normalize_inputs,
+                                                          normalize_targets, smooth_targets, new_srate, dataset_dict,
+                                                          start_from_trial=trial)
             trial += num_trials
         print('Writing dataset to', output_path)
         scipy.io.savemat(output_path, dataset_dict)
@@ -274,7 +304,7 @@ def create_grouped_dataset(dataset_path, subject_paths, output_path, file_format
 
 
 def create_individual_datasets(dataset_path, subject_paths, output_dir, file_format, crop_len, normalize_inputs,
-                               normalize_targets, smooth_targets):
+                               normalize_targets, smooth_targets, new_srate):
     for day in subject_paths:
         data_path = os.path.join(dataset_path, day + '_data.mat')
         header_path = os.path.join(dataset_path, day + '_header.mat')
@@ -284,7 +314,7 @@ def create_individual_datasets(dataset_path, subject_paths, output_dir, file_for
             with h5py.File(output_path, 'x') as hdf:
                 try:
                     create_hdf_dataset(hdf, data_path, header_path, crop_len, normalize_inputs, normalize_targets,
-                                       smooth_targets, start_from_trial=0)
+                                       smooth_targets, new_srate, start_from_trial=0)
                 except KeyError:
                     os.remove(output_path)
                     continue
@@ -292,46 +322,50 @@ def create_individual_datasets(dataset_path, subject_paths, output_dir, file_for
         else:
             ext = '.mat'
             output_path = os.path.join(output_dir, day + ext)
-            dataset_dict, _ = create_mat_dataset(data_path, header_path, crop_len, normalize_inputs, normalize_targets,
-                                                 smooth_targets, dataset_dict={}, start_from_trial=0)
+            dataset_dict, trial_count = create_mat_dataset(data_path, header_path, crop_len, normalize_inputs, normalize_targets,
+                                                           smooth_targets, new_srate, dataset_dict={}, start_from_trial=0)
 
-            print('Writing dataset to', output_path)
-            scipy.io.savemat(output_path, dataset_dict)
-            print('done!')
+            if trial_count > 0:
+                print('Writing dataset to', output_path)
+                scipy.io.savemat(output_path, dataset_dict)
+                print('done!')
 
 
 def create_mat_dataset(data_path, header_path, crop_len, normalize_inputs, normalize_targets, smooth_targets,
-                       dataset_dict={}, start_from_trial=0):
+                       new_srate, dataset_dict={}, start_from_trial=0):
     print('Working on:')
     print(data_path)
     print(header_path)
-    for trial_count, (ch_val, target, srate, game_type) in \
+    trial_count = 0
+    for trial_count, (ch_val, target, srate) in \
             enumerate(zip(*preprocess_day(data_path, header_path, common_signals=None, crop_len=crop_len,
                                           normalize_inputs=normalize_inputs, normalize_targets=normalize_targets,
-                                          smooth_targets=smooth_targets)),
+                                          smooth_targets=smooth_targets, new_srate=new_srate)),
                       1):
         dataset_dict['trial%d' % (start_from_trial + trial_count)] = \
             {'X': ch_val,
              'y': target,
-             'srate': srate,
-             'gameType': game_type}
+             'srate': srate
+             }
 
     print('%d trials were found!' % trial_count)
-    print('Trials\' ieeg signals shape')
-    print([trial['X'].shape for trial in dataset_dict.values()])
+    if trial_count > 0:
+        print('Trials\' ieeg signals shape')
+        print([trial['X'].shape for trial in dataset_dict.values()])
     return dataset_dict, trial_count
 
 
 def create_hdf_dataset(hdf, data_path, header_path, crop_len, normalize_inputs, normalize_targets, smooth_targets,
-                       start_from_trial=0):
+                       new_srate, start_from_trial=0):
     print('Working on:')
     print(data_path)
     print(header_path)
     shapes_list = []
-    for trial_count, (ch_val, target, srate, game_type) in\
+    trial_count = 0
+    for trial_count, (ch_val, target, srate) in\
             enumerate(zip(*preprocess_day(data_path, header_path, common_signals=None, crop_len=crop_len,
                                           normalize_inputs=normalize_inputs, normalize_targets=normalize_targets,
-                                          smooth_targets=smooth_targets)),
+                                          smooth_targets=smooth_targets, new_srate=new_srate)),
                       1):
         # create a group
         grp = hdf.create_group('trial%d' % (start_from_trial + trial_count))
@@ -340,13 +374,12 @@ def create_hdf_dataset(hdf, data_path, header_path, crop_len, normalize_inputs, 
         grp.create_dataset('y', data=target)
         # add the sampling rate to the attributes
         grp.attrs['srate'] = srate
-        # add game type
-        grp.attrs['gameType'] = game_type
         shapes_list.append(ch_val.shape)
 
     print('%d trials were found!' % trial_count)
-    print('Trials\' ieeg signals shape')
-    print(shapes_list)
+    if trial_count > 0:
+        print('Trials\' ieeg signals shape')
+        print(shapes_list)
 
     return trial_count
 
@@ -365,14 +398,16 @@ def create_hdf_dataset(hdf, data_path, header_path, crop_len, normalize_inputs, 
 @click.option('--subject', '-s', default='all', help='pre-process recordings of subject. if not provided, all subjects'
                                                      'appear in the dataset path will be pre-processed')
 @click.option('--crop_len', '-c', default=0, help='crop length. if not provided trials will not be cropped.')
-def main(dataset_path, subject, output_dir, output_format, group, crop_len, normalize_inputs, normalize_targets, smooth_targets):
+@click.option('--new_srate', default=0, help='if not 0 (defalut) the signals will be downsampled to the passed number.')
+def main(dataset_path, subject, output_dir, output_format, group, crop_len, normalize_inputs, normalize_targets,
+         smooth_targets, new_srate):
     output_format = output_format.lower()
     assert output_format == 'mat' or 'hdf', 'only MAT and HDF file formats are support'
     all_subject_pathes = read_dataset_dir(dataset_path)
-    if subject != 'all':
-        assert subject in all_subject_pathes, 'subject not found!'
+    if subject.lower() != 'all':
+        assert subject.lower() in [sub_id.lower() for sub_id in all_subject_pathes.keys()], 'subject not found!'
     for subject_id, subject_pathes in all_subject_pathes.items():
-        if subject != 'all' and subject != subject_id:
+        if subject.lower() != 'all' and subject.lower() != subject_id.lower():
             continue
         print_msg = 'Creating dataset for subject %s:' % subject_id
         print(print_msg)
@@ -385,10 +420,10 @@ def main(dataset_path, subject, output_dir, output_format, group, crop_len, norm
                     ext = '.mat'
                 output_path = os.path.join(output_dir, subject_id + ext)
                 create_grouped_dataset(dataset_path, subject_pathes, output_path, output_format, crop_len,
-                                       normalize_inputs, normalize_targets, smooth_targets)
+                                       normalize_inputs, normalize_targets, smooth_targets, new_srate)
             else:
                 create_individual_datasets(dataset_path, subject_pathes, output_dir, output_format, crop_len,
-                                           normalize_inputs, normalize_targets, smooth_targets)
+                                           normalize_inputs, normalize_targets, smooth_targets, new_srate)
         except KeyError:
             continue
 
