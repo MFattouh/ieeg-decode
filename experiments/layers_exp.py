@@ -108,7 +108,7 @@ def main(dataset_dir, subject, log_dir, num_layers, n_splits):
             training_writer = SummaryWriter(os.path.join(log_dir, rec_name, 'fold' + str(cross_valid_idx), 'train'))
             valid_writer = SummaryWriter(os.path.join(log_dir, rec_name, 'fold' + str(cross_valid_idx), 'valid'))
             # training_writer.add_text('Model parameters', str(HybridModel.get_meta(model)))
-            training_writer.add_text('Description', 'Adam. fixed relax window. changing crop len')
+            training_writer.add_text('Description', 'RNN with %s layer(s)' % num_layers)
             training_writer.add_text('Learning Rate', str(learning_rate))
             training_writer.add_text('Weight Decay', str(wd_const))
             training_writer.add_text('Crop Length[sec]', str(crop_len))
