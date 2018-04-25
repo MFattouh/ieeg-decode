@@ -26,7 +26,7 @@ torch.manual_seed(RANDOM_SEED)
 @click.argument('num_layers', type=int)
 @click.option('--n_splits', default=5, help='Number of cross-validation splits')
 def main(dataset_dir, subject, log_dir, num_layers, n_splits):
-    log_dir = os.path.join(log_dir, EXPERIMENT_NAME, str(num_layers)+'Layers', subject)
+    log_dir = os.path.join(log_dir, EXPERIMENT_NAME, subject, str(num_layers)+'Layers')
     if not os.path.isdir(log_dir):
         os.makedirs(log_dir)
 
@@ -80,7 +80,7 @@ def main(dataset_dir, subject, log_dir, num_layers, n_splits):
         print(msg)
         print('='*len(msg))
         print('='*len(msg))
-        crops, in_channels = read_dataset(dataset_path, crop_len*new_srate_x, stride)
+        crops, in_channels = read_dataset(dataset_path, crop_len*new_srate_x, stride, 'f')
         print(len(crops), 'trials found!')
         crop_idx = np.arange(len(crops)).squeeze().tolist()
         kfold = KFold(n_splits=n_splits, shuffle=False, random_state=RANDOM_SEED)
