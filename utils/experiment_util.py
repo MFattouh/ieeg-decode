@@ -11,7 +11,7 @@ logging.basicConfig(format=FORMAT)
 logger = logging.getLogger('__name__')
 
 
-def read_dataset(dataset_path, window, stride=1):
+def read_dataset(dataset_path, window, stride, dummy_idx):
     datasets_list = []
     with h5py.File(dataset_path, 'r') as hf:
         trials = [hf[obj_ref] for obj_ref in hf['D'][0]]
@@ -20,7 +20,7 @@ def read_dataset(dataset_path, window, stride=1):
                 # read data
                 X = trial['ieeg'][:]
                 y = trial['traj'][:][:].squeeze()
-                datasets_list.append(ECoGDatast(X, y, window, stride, input_shape='ct'))
+                datasets_list.append(ECoGDatast(X, y, window, stride, input_shape='ct', dummy_idx=dummy_idx))
                 in_channels = X.shape[0]
             except ValueError as e:
                 logger.warning('exception found while creating dataset object from trial %s \n%s' % (idx, e))
@@ -53,20 +53,22 @@ def make_weights(crop_len, num_relaxed_samples, type='qubic'):
 
 
 def run_experiment(model, optimizer, loss_fun, metric, training_loader, training_writer, valid_loader, valid_writer,
-                   weights_path, max_epochs, eval_every, cuda):
+                   weights_path, max_epochs, eval_train_every, eval_valid_every, cuda):
     min_loss = float('inf')
     max_acc = -float('inf')
     for epoch in range(max_epochs+1):
         # scheduler.step()
         train(model, training_loader, optimizer, loss_fun, keep_state=False, clip=10, cuda=cuda)
-        if epoch % eval_every == 0:
+        if epoch % eval_train_every == 0:
             train_loss, train_corr = evaluate(model, training_loader, loss_fun, metric, keep_state=False,
                                               writer=training_writer, epoch=epoch, cuda=cuda)
             print(str(datetime.now()),
                   ': training loss value', train_loss, 'training corr', train_corr,
                   'at epoch', epoch)
+        if epoch % eval_valid_every == 0:
             valid_loss, valid_corr = evaluate(model, valid_loader, loss_fun, metric, keep_state=False,
                                               writer=valid_writer, epoch=epoch, cuda=cuda)
+
             print(str(datetime.now()),
                   ': valid loss value', valid_loss, 'valid corr', valid_corr,
                   'at epoch', epoch)
@@ -82,11 +84,12 @@ def run_experiment(model, optimizer, loss_fun, metric, training_loader, training
                 max_acc = valid_corr
 
             # if training stalls
-            if np.isnan(train_corr) or np.isnan(valid_corr):
-                break
+        if np.isnan(train_corr) or np.isnan(valid_corr):
+            logger.error('Training stalled')
+            break
 
     # report last acc
     print(str(datetime.now()),
           ':final valid loss:', valid_loss, 'final valid corr', valid_corr)
 
-    return max_acc
+    return max_acc, min_loss

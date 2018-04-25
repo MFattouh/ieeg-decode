@@ -26,7 +26,7 @@ torch.manual_seed(RANDOM_SEED)
 @click.argument('num_layers', type=int)
 @click.option('--n_splits', default=5, help='Number of cross-validation splits')
 def main(dataset_dir, subject, log_dir, num_layers, n_splits):
-    log_dir = os.path.join(log_dir, EXPERIMENT_NAME, subject, str(num_layers)+'Layers')
+    log_dir = os.path.join(log_dir, EXPERIMENT_NAME, str(num_layers)+'Layers', subject)
     if not os.path.isdir(log_dir):
         os.makedirs(log_dir)
 
@@ -72,7 +72,9 @@ def main(dataset_dir, subject, log_dir, num_layers, n_splits):
         rec_day_name = os.path.basename(dataset_path).split('.')[0].split('_')
         rec_names.append('_'.join([rec_day_name[1], rec_day_name[3]]))
 
-    df = pd.DataFrame(index=rec_names, columns=np.arange(1, n_splits+1).tolist())
+    index = pd.MultiIndex.from_product([rec_names, ['fold%d' % fold for fold in range(1,n_splits+1)]],
+                                       names=['day', 'fold'])
+    df = pd.DataFrame(index=index, columns=['corr', 'mse'])
     for dataset_path, rec_name in zip(datasets, rec_names):
         msg = str(datetime.now()) + ': Start working on dataset %s:' % dataset_path
         print(msg)
@@ -84,7 +86,7 @@ def main(dataset_dir, subject, log_dir, num_layers, n_splits):
         kfold = KFold(n_splits=n_splits, shuffle=False, random_state=RANDOM_SEED)
         for cross_valid_idx, (train_split, valid_split) in enumerate(kfold.split(crop_idx), 1):
             training_loader, valid_loader = create_loader(crops, train_split, valid_split, batch_size)
-            msg = str(datetime.now()) + ': CROP%d:' % cross_valid_idx
+            msg = str(datetime.now()) + ': FOLD%d:' % cross_valid_idx
             print(msg)
             print('='*len(msg))
             print('Training trials:')
@@ -117,13 +119,13 @@ def main(dataset_dir, subject, log_dir, num_layers, n_splits):
 
             weights_path = os.path.join(log_dir, rec_name, 'fold' + str(cross_valid_idx), 'weights.pt')
 
-            cv_corr = run_experiment(model, optimizer, loss_fun, metric, training_loader, training_writer,
-                                     valid_loader, valid_writer, weights_path, max_epochs=MAX_EPOCHS,
-                                     eval_every=EVAL_EVERY, cuda=CUDA)
+            fold_corr, fold_mse = run_experiment(model, optimizer, loss_fun, metric, training_loader, training_writer,
+                                                 valid_loader, valid_writer, weights_path, max_epochs=MAX_EPOCHS,
+                                                 eval_train_every=EVAL_EVERY, eval_valid_every=EVAL_EVERY, cuda=CUDA)
 
-            df.loc[rec_name, cross_valid_idx] = cv_corr
+            df.loc[(rec_name, 'fold' + str(cross_valid_idx)), :] = [fold_corr, fold_mse]
             # writes every time just in case it couldn't run the complete script
-            df.to_csv(os.path.join(log_dir, 'cv_acc.csv'))
+            df.to_csv(os.path.join(log_dir, 'cv_acc.csv'), index=True)
 
 
 if __name__ == '__main__':
