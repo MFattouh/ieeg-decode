@@ -218,7 +218,7 @@ if __name__ == '__main__':
     
     filename = filename[:-4]+".pickle"
     print("Saving", filename)
-    pickle.dump(data, open(filename, 'w'),
+    pickle.dump(data, open(filename, 'wb'),
                 protocol=pickle.HIGHEST_PROTOCOL)
 
 
