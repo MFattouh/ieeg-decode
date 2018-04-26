@@ -21,7 +21,7 @@ MAX_EPOCHS = 1000
 EVAL_TRAIN_EVERY = 50
 EVAL_VALID_EVERY = 50
 CUDA = True
-EXPERIMENT_NAME = 'cross_validation'
+EXPERIMENT_NAME = 'models'
 RANDOM_SEED = 10418
 np.random.seed(RANDOM_SEED)
 torch.manual_seed(RANDOM_SEED)
