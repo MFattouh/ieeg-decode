@@ -15,6 +15,7 @@ import pandas as pd
 from braindecode.models.util import to_dense_prediction_model
 from braindecode.torch_ext.modules import Expression
 from braindecode.models.deep4 import Deep4Net
+from braindecode.models.shallow_fbcsp import ShallowFBCSPNet as Shallow
 from torch.nn.functional import mse_loss
 
 MAX_EPOCHS = 1000
@@ -35,7 +36,7 @@ torch.manual_seed(RANDOM_SEED)
 @click.option('--n_splits', default=5, help='Number of cross-validation splits')
 def main(dataset_dir, subject, model_type, log_dir, n_splits):
     model_type = model_type.lower()
-    assert model_type in ['rnn', 'deep4', 'shallow'], 'Model %s not understood!' % model_type.upper()
+    assert model_type in ['rnn', 'deep4', 'shallow', 'tcn'], 'Model %s not understood!' % model_type.upper()
     log_dir = os.path.join(log_dir, EXPERIMENT_NAME, subject, model_type.upper())
     if not os.path.isdir(log_dir):
         os.makedirs(log_dir)
@@ -82,9 +83,19 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits):
         learning_rate = 1e-4
         wd_const = 0
         dummy_idx = 'l'
-    else:
+    elif model_type == 'shallow':
+        wd_const = 0
         dummy_idx = 'l'
+        learning_rate = 1e-4
+        num_dropped_samples = 113
+        weights = make_weights(crop_len * new_srate_x - num_dropped_samples, num_relaxed_samples - num_dropped_samples,
+                               type='step')
+        weights_tensor = torch.from_numpy(weights)
+        if CUDA:
+            weights_tensor = weights_tensor.cuda()
+    else:
         raise NotImplementedError
+
 
     # data frame to hold cv cross. corr.
     rec_names = []
@@ -145,7 +156,32 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits):
                 optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
                 loss_fun = mse_loss
                 metric = CorrCoeff().corrcoeff
-            else:
+            elif model_type == 'shallow':
+                model = Shallow(in_chans=in_channels, n_classes=1, input_time_length=crop_len * new_srate_x,
+                                final_conv_length=2).create_network()
+
+                # remove softmax
+                new_model = nn.Sequential()
+                for name, module in model.named_children():
+                    if name == 'softmax':
+                        break
+                    new_model.add_module(name, module)
+
+                # lets remove empty final dimension
+                def squeeze_out(x):
+                    assert x.size()[1] == 1 and x.size()[3] == 1
+                    return x[:, 0, :, 0]
+
+                new_model.add_module('squeeze', Expression(squeeze_out))
+                model = new_model
+
+                to_dense_prediction_model(model)
+
+                optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
+                loss_fun = WeightedMSE(weights_tensor)
+                metric = CorrCoeff(weights).weighted_corrcoef
+
+            elif model_type == 'tcn':
                 raise NotImplementedError
 
             if CUDA:
