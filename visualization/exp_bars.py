@@ -19,9 +19,14 @@ def plot_folds(dataset_dir):
         df = pd.read_csv(csv_path)
         results.loc[idx, :] = [df['corr'].mean(), experiment]
 
-    sns.factorplot(x='exp', y='corr', kind='bar', size=6, data=results)
+    exp_type = os.path.basename(os.path.dirname(dataset_dir))
+    if exp_type.lower() == 'layers':
+        order = ['1Layer', '2Layers', '3Layers']
+    else:
+        order = None
 
-    plt.savefig(os.path.join(dataset_dir, os.path.basename(os.path.dirname(dataset_dir)) + '.png'))
+    sns.factorplot(x='exp', y='corr', kind='bar', order=order, size=6, data=results)
+    plt.savefig(os.path.join(dataset_dir,  exp_type + '.png'))
 
 
 if __name__ == '__main__':
