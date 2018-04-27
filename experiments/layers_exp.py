@@ -26,7 +26,10 @@ torch.manual_seed(RANDOM_SEED)
 @click.argument('num_layers', type=int)
 @click.option('--n_splits', default=5, help='Number of cross-validation splits')
 def main(dataset_dir, subject, log_dir, num_layers, n_splits):
-    log_dir = os.path.join(log_dir, EXPERIMENT_NAME, subject, str(num_layers)+'Layers')
+    if num_layers == 1:
+        log_dir = os.path.join(log_dir, EXPERIMENT_NAME, subject, str(num_layers)+'Layer')
+    else:
+        log_dir = os.path.join(log_dir, EXPERIMENT_NAME, subject, str(num_layers)+'Layers')
     if not os.path.isdir(log_dir):
         os.makedirs(log_dir)
 
