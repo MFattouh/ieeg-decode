@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import click
 import numpy as np
+from string import ascii_letters
+
 
 @click.command()
 @click.argument('dataset_dir', type=click.Path(exists=True))
@@ -23,11 +25,16 @@ def exp_plot(dataset_dir):
     results['corr'] = results['corr'].astype(float)
     exp_type = os.path.basename(os.path.dirname(dataset_dir))
     if exp_type.lower() == 'layers':
-        order = ['1Layer', '2Layers', '3Layers']
+        order = sorted(set(experiments), key=lambda exp: int(exp.strip(ascii_letters)))
+        x_axes_label = 'Number of Layers'
+    elif exp_type.lower() == 'models':
+        order = ['SHALLOW', 'DEEP4', 'RNN']
+        x_axes_label = 'Architecture'
     else:
         order = None
-    sns.factorplot(x='exp', y='corr', kind='box', order=order, size=6, data=results)
-    plt.savefig(os.path.join(dataset_dir,  exp_type + '.png'))
+    g = sns.factorplot(x='exp', y='corr', kind='box', order=order, size=6, data=results)
+    g.set_axis_labels(x_axes_label, "corr. coeff.")
+    g.savefig(os.path.join(dataset_dir,  exp_type + '.png'))
 
 
 if __name__ == '__main__':

@@ -6,6 +6,7 @@ from glob import glob
 import matplotlib.pyplot as plt
 import seaborn as sns
 import click
+from string import ascii_letters
 
 
 @click.command()
@@ -25,16 +26,22 @@ def plot_folds(dataset_dir):
     results.reset_index(drop=True, inplace=True)
     days = list(set(results.day.values.tolist()))
     n_folds = len(set(df.fold.values.tolist()))
-    exp_type = os.path.basename(os.path.dirname(os.path.dirname(dataset_dir)))
+    exp_type = os.path.basename(os.path.dirname(dataset_dir))
+    x_axes_label = 'folds'
     if exp_type.lower() == 'layers':
-        hue_order = ['1Layer', '2Layers', '3Layers']
+        hue_order = sorted(set(experiments), key=lambda exp: int(exp.strip(ascii_letters)))
+    elif exp_type.lower() == 'models':
+        hue_order = ['SHALLOW', 'DEEP4', 'RNN']
     else:
         hue_order = None
     for day in days:
         gp = results[results.day == day]
-        sns.factorplot(x='fold', y='corr', hue='exp', kind='bar', size=6, data=gp,
-                       order=['fold%d' % fold for fold in range(1, n_folds+1)], hue_order=hue_order)
-        plt.savefig(os.path.join(dataset_dir, day+'.png'))
+        g = sns.factorplot(x='fold', y='corr', hue='exp', kind='bar', size=6, data=gp, legend_out=True,
+                           order=['fold%d' % fold for fold in range(1, n_folds+1)], hue_order=hue_order)
+
+        g.set_axis_labels(x_axes_label, "corr. coeff.")
+        g._legend.set_title('')
+        g.savefig(os.path.join(dataset_dir, day+'.png'))
 
 
 if __name__ == '__main__':
