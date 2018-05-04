@@ -36,7 +36,7 @@ torch.manual_seed(RANDOM_SEED)
 @click.option('--n_splits', default=5, help='Number of cross-validation splits')
 def main(dataset_dir, subject, model_type, log_dir, n_splits):
     model_type = model_type.lower()
-    assert model_type in ['rnn', 'deep4', 'shallow', 'tcn'], 'Model %s not understood!' % model_type.upper()
+    assert model_type in ['rnn', 'deep4', 'shallow', 'hybrid', 'tcn'], 'Model %s not understood!' % model_type.upper()
     log_dir = os.path.join(log_dir, EXPERIMENT_NAME, subject, model_type.upper())
     if not os.path.isdir(log_dir):
         os.makedirs(log_dir)
@@ -47,23 +47,6 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits):
     new_srate_y = 250
     x2y_ratio = new_srate_x / new_srate_y
     batch_size = 32
-    hidden_size = 64
-    num_layers = 3
-    channel_config = None
-    time_config = None
-    weights_dropout = ['weight_ih_l%d' % layer for layer in range(num_layers)]
-    weights_dropout.extend(['weight_hh_l%d' % layer for layer in range(num_layers)])
-    rnn_config = {'rnn_type': 'gru',
-                  'hidden_size': hidden_size,
-                  'num_layers': num_layers,
-                  'dropout': 0.3,
-                  'weights_dropout': weights_dropout,
-                  'batch_norm': False}
-    fc_config = {'num_classes': 1,
-                 'fc_size': [32, 10],
-                 'batch_norm': [False, False],
-                 'dropout': [0.5, .3],
-                 'activations': [nn.Hardtanh(-1, 1, inplace=True)] * 2}
 
     # window size
     crop_len = 16
@@ -72,6 +55,23 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits):
     stride = crop_len * new_srate_x - num_relaxed_samples
     # define some constans related to model type
     if model_type == 'rnn':
+        hidden_size = 64
+        num_layers = 3
+        channel_config = None
+        time_config = None
+        weights_dropout = ['weight_ih_l%d' % layer for layer in range(num_layers)]
+        weights_dropout.extend(['weight_hh_l%d' % layer for layer in range(num_layers)])
+        rnn_config = {'rnn_type': 'gru',
+                      'hidden_size': hidden_size,
+                      'num_layers': num_layers,
+                      'dropout': 0.3,
+                      'weights_dropout': weights_dropout,
+                      'batch_norm': False}
+        fc_config = {'num_classes': 1,
+                     'fc_size': [32, 10],
+                     'batch_norm': [False, False],
+                     'dropout': [0.5, .3],
+                     'activations': [nn.Hardtanh(-1, 1, inplace=True)] * 2}
         learning_rate = 5e-3
         wd_const = 5e-6
         dummy_idx = 'f'
@@ -93,11 +93,36 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits):
         weights_tensor = torch.from_numpy(weights)
         if CUDA:
             weights_tensor = weights_tensor.cuda()
+    elif model_type == 'hybrid':
+        hidden_size = 10
+        num_layers = 1
+        time_config = {'time_filters': [2, 4, 8],
+                       'time_kernels': [17, 17, 17],
+                       'activations': [nn.Hardtanh(-1, 1, inplace=True)] * 3,
+                       'dilations': [1, 2, 4]}
+        rnn_config = {'rnn_type': 'gru',
+                      'hidden_size': hidden_size,
+                      'num_layers': num_layers,
+                      'dropout': 0.0,
+                      'batch_norm': False}
+        fc_config = {'num_classes': 1,
+                     'batch_norm': [False],
+                     'dropout': [0]
+                     }
+        l2pooling_config = {'window': 10, 'stride': 1}
+        learning_rate = 5e-3
+        wd_const = 5e-6
+        dummy_idx = 'f'
+        num_dropped_samples = 121
+        weights = make_weights(crop_len * new_srate_x - num_dropped_samples, num_relaxed_samples - num_dropped_samples,
+                               type='step')
+        weights_tensor = torch.from_numpy(weights)
+        if CUDA:
+            weights_tensor = weights_tensor.cuda()
+
     else:
         raise NotImplementedError
 
-
-    # data frame to hold cv cross. corr.
     rec_names = []
     for dataset_path in datasets:
         rec_day_name = os.path.basename(dataset_path).split('.')[0].split('_')
@@ -115,6 +140,7 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits):
         print(len(crops), 'trials found!')
         crop_idx = np.arange(len(crops)).squeeze().tolist()
         kfold = KFold(n_splits=n_splits, shuffle=False, random_state=RANDOM_SEED)
+
         for cross_valid_idx, (train_split, valid_split) in enumerate(kfold.split(crop_idx), 1):
             training_loader, valid_loader = create_loader(crops, train_split, valid_split, batch_size)
             msg = str(datetime.now()) + ': FOLD%d:' % cross_valid_idx
@@ -176,6 +202,17 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits):
                 model = new_model
 
                 to_dense_prediction_model(model)
+
+                optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
+                loss_fun = WeightedMSE(weights_tensor)
+                metric = CorrCoeff(weights).weighted_corrcoef
+            elif model_type == 'hybrid':
+                channel_config = {
+                    'channel_filters': [in_channels]
+                }
+                model = HybridModel(in_channels=in_channels, channel_conv_config=channel_config,
+                                    time_conv_config=time_config, rnn_config=rnn_config, l2pooling_config=l2pooling_config,
+                                    fc_config=fc_config, output_stride=int(x2y_ratio))
 
                 optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
                 loss_fun = WeightedMSE(weights_tensor)
