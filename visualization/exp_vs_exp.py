@@ -13,6 +13,7 @@ from string import ascii_letters
 @click.command()
 @click.argument('dataset_dir', type=click.Path(exists=True))
 def exp_heatmap(dataset_dir):
+    sns.set_style("darkgrid")
     csv_pathes = glob(os.path.join(dataset_dir, '*/*/*.csv'))
     assert csv_pathes, 'No csv files found!'
     experiments = [os.path.basename(os.path.dirname(path)) for path in csv_pathes]
@@ -29,10 +30,6 @@ def exp_heatmap(dataset_dir):
                                      ignore_index=True)
 
     results['corr'] = results['corr'].astype(float)
-    # results.set_index(['sub', 'exp'], inplace=True)
-    # results.sort_index(inplace=True)
-    # print(results)
-    # exit()
     exp_type = os.path.basename(os.path.dirname(dataset_dir))
     unique_experiments = set(experiments)
 
@@ -53,9 +50,9 @@ def exp_heatmap(dataset_dir):
             g = sns.lmplot(x=first_exp, y=second_exp, hue='sub', size=6, data=corr_tabel, fit_reg=False,
                            legend=True, legend_out=True)
 
-            g.ax.plot([0, 1], [0, 1], '-k')
+            g.ax.plot([0, 1], [0, 1], linestyle=':', color='tab:gray')
             g.set(xticks=np.arange(0, 1.2, 0.2).squeeze().tolist(), xlim=(0, 1))
-            g.set(yticks=np.arange(0, 1.2, 0.2).squeeze().tolist(), ylim=(0, 1))
+            g.set(yticks=np.arange(0.2, 1.2, 0.2).squeeze().tolist(), ylim=(0, 1))
             g.savefig(os.path.join(dataset_dir,  first_exp + '_vs_' + second_exp + '.png'))
 
 
