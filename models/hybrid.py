@@ -48,6 +48,10 @@ class Expression(torch.nn.Module):
                 'expression=' + str(expression_str) + ')')
 
 
+def _log_nonlinearity():
+    return Expression(lambda x: torch.log(x+1))
+
+
 def _transpose_C_to_W():
     # x is expected to be Nx1xCxT
     return Expression(lambda x: x.transpose(2, 1))  # NxCx1xT
@@ -61,7 +65,7 @@ def _rnn_to_bn_transpose():
 def _rnn_to_fc_transpose():
     # x is expected to be TxNxH
     # x = x..contiguous()
-    return Expression(lambda x: x.transpose(1, 0)).contiguous()  # NxTxH
+    return Expression(lambda x: x.transpose(1, 0).contiguous())  # NxTxH
 
 
 # the next two functions perform exactly the same operation. just for the sake of calrity
@@ -86,8 +90,8 @@ def _drop_last():
 
 
 class HybridModel(nn.Module):
-    def __init__(self, in_channels=0, channel_conv_config=None, time_conv_config=None, rnn_config=None, fc_config=None,
-                 output_stride=0):
+    def __init__(self, in_channels=0, channel_conv_config=None, time_conv_config=None, l2pooling_config=None,
+                 rnn_config=None, fc_config=None, output_stride=0):
 
         super(HybridModel, self).__init__()
         self._output_stride = output_stride
@@ -105,6 +109,11 @@ class HybridModel(nn.Module):
             self.time_conv = self.make_time_convs(**time_conv_config)
         else:
             self.time_conv = None
+
+        if l2pooling_config is not None:
+            self.l2pooling = self.make_l2pooling(**l2pooling_config)
+        else:
+            self.l2pooling = None
 
         rnn_input_size = channel_conv_config['channel_filters'][-1] if self.channel_conv is not None else in_channels
         rnn_input_size = rnn_input_size * time_conv_config['time_filters'][-1] if self.time_conv is not None\
@@ -196,37 +205,71 @@ class HybridModel(nn.Module):
 
         return fully_connected
 
-    def make_time_convs(self, batch_norm=[], initializer=None, time_filters=[], time_kernels=[], activations=[]):
-        assert len(time_filters) == len(time_kernels) == len(activations) == len(batch_norm)
+    def make_time_convs(self, batch_norm=None, initializer=None, time_filters=None, time_kernels=None, activations=None,
+                        dilations=None):
+        assert time_filters is not None
+        assert time_kernels is not None
+        assert len(time_filters) == len(time_kernels)
+
+        if batch_norm is not None:
+            assert len(time_filters) == len(batch_norm)
+        else:
+            batch_norm = [False] * len(time_filters)
+
+        if activations is not None:
+            assert len(time_filters) == len(activations)
+        else:
+            activations = [None] * len(time_filters)
+
+        if dilations is not None:
+            assert len(time_filters) == len(dilations)
+        else:
+            dilations = [1] * len(time_filters)
+
         time_conv = list()
-        time_conv.append(('conv0', nn.Conv2d(1, time_filters[0], kernel_size=(1, time_kernels[0]),
+        time_conv.append(('conv0', nn.Conv2d(1, time_filters[0], kernel_size=(1, time_kernels[0]), dilation=dilations[0],
                                              bias=not batch_norm[0])))
         if initializer is not None:
             initializer(time_conv[-1][1].weight)
-        time_conv.append(('activation0', activations[0]))
+        if activations[0] is not None:
+            time_conv.append(('activation0', activations[0]))
+
         if batch_norm[0]:
             time_conv.append(('BN0', nn.BatchNorm2d(time_filters[0])))
-        for layer, (num_filters, kernel, activation, bn) in \
-                enumerate(zip(time_filters[1:], time_kernels[1:], activations[1:], batch_norm[1:]), 1):
-            time_conv.append(('conv%d' % layer, nn.Conv2d(time_filters[layer - 1], num_filters,
+        for layer, (num_filters, kernel, activation, bn, dilation) in \
+                enumerate(zip(time_filters[1:], time_kernels[1:], activations[1:], batch_norm[1:], dilations[1:]), 1):
+            time_conv.append(('conv%d' % layer, nn.Conv2d(time_filters[layer - 1], num_filters, dilation=dilation,
                                                           kernel_size=(1, kernel), bias=not bn)))
             if initializer is not None:
                 initializer(time_conv[-1][1].weight)
-            time_conv.append(('activation%d' % layer, activation))
+            if activation is not None:
+                time_conv.append(('activation%d' % layer, activation))
             if bn:
                 time_conv.append(('BN%d' % layer, nn.BatchNorm2d(num_filters)))
 
         time_conv = nn.Sequential(OrderedDict(time_conv))
         return time_conv
 
-    def make_channels_conv(self, in_channels=0, batch_norm=[], channel_filters=[], initializer=None, activations=[]):
-        assert len(channel_filters) == len(activations) == len(batch_norm)
+    def make_channels_conv(self, in_channels, batch_norm=None, channel_filters=None, initializer=None, activations=None):
+        assert channel_filters is not None
+
+        if batch_norm is not None:
+            assert len(channel_filters) == len(batch_norm)
+        else:
+            batch_norm = [False] * len(channel_filters)
+
+        if activations is not None:
+            assert len(channel_filters) == len(activations)
+        else:
+            activations = [None] * len(channel_filters)
+
         channels_conv = list()
         channels_conv.append(('conv0', nn.Conv2d(1, channel_filters[0], kernel_size=(in_channels, 1),
                                                  bias=not batch_norm[0])))
         if initializer is not None:
             initializer(channels_conv[-1][1].weight)
-        channels_conv.append(('activation0', activations[0]))
+        if activations[0] is not None:
+            channels_conv.append(('activation0', activations[0]))
         if batch_norm[0]:
             channels_conv.append(('BN0', nn.BatchNorm2d(channel_filters[0])))
         if len(channel_filters) > 1:
@@ -238,7 +281,8 @@ class HybridModel(nn.Module):
                                                                   bias=not batch_norm)))
                 if initializer is not None:
                     initializer(channels_conv[-1][1].weight)
-                channels_conv.append(('activation%d' % layer, activation))
+                if activation is not None:
+                    channels_conv.append(('activation%d' % layer, activation))
                 if bn:
                     channels_conv.append(('BN%d' % layer, nn.BatchNorm2d(num_filters)))
                 channels_conv.append(('trans%d2' % layer, _transpose_C_to_W()))
@@ -249,12 +293,23 @@ class HybridModel(nn.Module):
 
         return channel_conv
 
+    def make_l2pooling(self, window=40, stride=1):
+        l2layer = []
+        l2layer.append(('l2pool', torch.nn.LPPool2d(2, (1, window), stride=stride)))
+        l2layer.append(('activation', _log_nonlinearity()))
+
+        return nn.Sequential(OrderedDict(l2layer))
+
     def forward(self, x, hidden=None):
         # x is expected to be Nx1xCxT
         if self.channel_conv is not None:
             x = self.channel_conv(x)   # NxCx1xT
+
         if self.time_conv is not None:
             x = self.time_conv(x)      # NxC2xC1xT2
+
+        if self.l2pooling is not None:
+            x = self.l2pooling(x)      # NxC2xC1xT3
 
         sizes = x.size()
         x = x.view(sizes[0], sizes[1] * sizes[2], sizes[3])  # Collapse feature dimension
