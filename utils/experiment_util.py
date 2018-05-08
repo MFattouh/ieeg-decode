@@ -29,6 +29,42 @@ def read_dataset(dataset_path, window, stride, dummy_idx):
     return datasets_list, in_channels
 
 
+def read_multi_datasets(input_datasets_path, window, stride, dummy_idx):
+    datasets_list = []
+    with h5py.File(input_datasets_path[0], 'r') as hf:
+        trials = [hf[obj_ref] for obj_ref in hf['D'][0]]
+        for idx, trial in enumerate(trials, 1):
+            try:
+                # read data
+                X = trial['ieeg'][:]
+                y = trial['traj'][:][:].squeeze()
+                in_channels = X.shape[0]
+                datasets_list.append([X, y])
+            except ValueError as e:
+                logger.warning('exception found while creating dataset object from trial %s \n%s' % (idx, e))
+                continue
+
+    for dataset_path in input_datasets_path[1:]:
+        with h5py.File(dataset_path, 'r') as hf:
+            trials = [hf[obj_ref] for obj_ref in hf['D'][0]]
+            for idx, trial in enumerate(trials):
+                try:
+                    # read data
+                    X = trial['ieeg'][:]
+                    np.testing.assert_equal(X, datasets_list[idx][0], 'iEEG channels did not match')
+                    datasets_list[idx][1] = np.c_[datasets_list[idx][1],
+                                                  trial['traj'][:][:].squeeze()]
+                except ValueError as e:
+                    logger.warning('exception found while creating dataset object from trial %s \n%s' % (idx + 1, e))
+                    continue
+
+    pytorch_datasets = []
+    for dataset in datasets_list:
+        pytorch_datasets.append(ECoGDatast(dataset[0], dataset[1], window, stride, input_shape='ct', dummy_idx=dummy_idx))
+
+    return pytorch_datasets, in_channels
+
+
 def create_loader(datasets, train_split, valid_split, batch_size):
     training_dataset = ConcatDataset([datasets[idx] for idx in train_split])
     training_loader = DataLoader(training_dataset, batch_size=batch_size, shuffle=True, drop_last=False, num_workers=2)
@@ -55,7 +91,6 @@ def make_weights(crop_len, num_relaxed_samples, type='qubic'):
 def run_experiment(model, optimizer, loss_fun, metric, training_loader, training_writer, valid_loader, valid_writer,
                    weights_path, max_epochs, eval_train_every, eval_valid_every, cuda):
     min_loss = float('inf')
-    max_acc = -float('inf')
     for epoch in range(max_epochs+1):
         # scheduler.step()
         train(model, training_loader, optimizer, loss_fun, keep_state=False, clip=10, cuda=cuda)
@@ -65,6 +100,11 @@ def run_experiment(model, optimizer, loss_fun, metric, training_loader, training
             print(str(datetime.now()),
                   ': training loss value', train_loss, 'training corr', train_corr,
                   'at epoch', epoch)
+        if type(train_corr) == dict:
+            max_acc = dict(zip(list(train_corr.keys()), [-float('inf')] * len(train_corr)))
+            print(max_acc)
+        else:
+            max_acc = -float('inf')
         if epoch % eval_valid_every == 0:
             valid_loss, valid_corr = evaluate(model, valid_loader, loss_fun, metric, keep_state=False,
                                               writer=valid_writer, epoch=epoch, cuda=cuda)
@@ -80,13 +120,23 @@ def run_experiment(model, optimizer, loss_fun, metric, training_loader, training
                 torch.save(model.state_dict(), weights_path)
                 min_loss = valid_loss
 
-            if valid_corr > max_acc:
+            if type(valid_corr) == dict:
+                for task, corr in valid_corr.items():
+                    if corr > max_acc[task]:
+                        max_acc[task] = corr
+
+            elif valid_corr > max_acc:
                 max_acc = valid_corr
 
-            # if training stalls
-        if np.isnan(train_corr) or np.isnan(valid_corr):
-            logger.error('Training stalled')
-            break
+        # if training stalls
+        if type(valid_corr) == dict:
+            if np.any(np.isnan(list(train_corr.values()))) or np.any(np.isnan(list(valid_corr.values()))):
+                logger.error('Training stalled')
+                break
+        else:
+            if np.isnan(train_corr) or np.isnan(valid_corr):
+                logger.error('Training stalled')
+                break
 
     # report last acc
     print(str(datetime.now()),

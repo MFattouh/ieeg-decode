@@ -425,8 +425,7 @@ def evaluate(model, data_loader, loss_fun, metric, keep_state=False, writer=None
     else:
         avg_corr = dict()
         for i in range(num_classes):
-            avg_corr['Class%d' % i] = np.tanh(cum_corr[:, i] / valid_corr[:, i]).mean()
-
+            avg_corr['Class%d' % i] = np.tanh(cum_corr[i] / valid_corr[i]).mean()
 
     if writer is not None:
         writer.add_scalar('loss', avg_loss, epoch)

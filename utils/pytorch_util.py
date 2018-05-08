@@ -14,7 +14,9 @@ class WeightedMSE(_WeightedLoss):
             weight = Variable(self.weight)
         else:
             weight = self.weight
-        return torch.mean(weight * ((input - target) ** 2).mean(dim=0))
+        if target.dim() > 1:
+            weight = weight.unsqueeze(1)
+        return torch.mean(weight * ((input - target).pow(2)).mean(dim=0))
 
 
 class CorrCoeff:

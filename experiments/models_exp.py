@@ -1,8 +1,6 @@
 # import torch.multiprocessing as mp
 import os
 
-from sphinx.addnodes import index
-
 os.sys.path.insert(0, '..')
 from utils.experiment_util import *
 from tensorboardX import SummaryWriter
@@ -26,22 +24,40 @@ EXPERIMENT_NAME = 'models'
 RANDOM_SEED = 10418
 np.random.seed(RANDOM_SEED)
 torch.manual_seed(RANDOM_SEED)
+TASK_NAMES = ['POS', 'VEL']
 
 
-@click.command()
+@click.command(name='models-experiments')
 @click.argument('dataset_dir', type=click.Path(exists=True))
 @click.argument('subject', type=str)
-@click.argument('model_type', type=str)
 @click.argument('log_dir', type=click.Path())
+@click.option('--model_type', '-m', type=click.Choice(['rnn', 'deep4', 'shallow', 'hybrid']), default='rnn')
 @click.option('--n_splits', default=5, help='Number of cross-validation splits')
-def main(dataset_dir, subject, model_type, log_dir, n_splits):
-    model_type = model_type.lower()
-    assert model_type in ['rnn', 'deep4', 'shallow', 'hybrid', 'tcn'], 'Model %s not understood!' % model_type.upper()
-    log_dir = os.path.join(log_dir, EXPERIMENT_NAME, subject, model_type.upper())
+@click.option('--task', '-t', type=click.Choice(['pos', 'vel', 'multi']), default='pos',
+              help='Task to decode. acceptable are:\n'
+                   '* pos for position decoding.\n'
+                   '* vel for velocity decoding.\n'
+                   '* multi for multi-task decoding.\n'
+                   'default is pos')
+def main(dataset_dir, subject, model_type, log_dir, n_splits, task):
+    log_dir = os.path.join(log_dir, task.upper(), subject, model_type.upper())
     if not os.path.isdir(log_dir):
         os.makedirs(log_dir)
 
-    datasets = glob(dataset_dir + '*'+subject+'_*_xpos.mat')
+    datasets = []
+    if task == 'pos':
+        datasets = glob(dataset_dir + '*'+subject+'_*_xpos.mat')
+    elif task == 'vel':
+        datasets = glob(dataset_dir + '*'+subject+'_*_xvel.mat')
+    elif task == 'multi':
+        pos_datasets = glob(dataset_dir + '*'+subject+'_*_xpos.mat')
+        for pos_dataset in pos_datasets:
+            recording_day = pos_dataset.rstrip('_xpos.mat')
+            vel_dataset = recording_day + '_xvel.mat'
+            assert os.path.exists(vel_dataset), 'could not find enough files for multi-task decoding'
+            datasets.append((pos_dataset, vel_dataset))
+    else:
+        raise KeyError
     assert len(datasets) > 0, 'no datasets for subject %s found!' % subject
     new_srate_x = 250
     new_srate_y = 250
@@ -53,7 +69,7 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits):
     num_relaxed_samples = 681  # int(relax_window * new_srate_x)
 
     stride = crop_len * new_srate_x - num_relaxed_samples
-    # define some constans related to model type
+    # define some constants related to model type
     if model_type == 'rnn':
         hidden_size = 64
         num_layers = 3
@@ -67,11 +83,6 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits):
                       'dropout': 0.3,
                       'weights_dropout': weights_dropout,
                       'batch_norm': False}
-        fc_config = {'num_classes': 1,
-                     'fc_size': [32, 10],
-                     'batch_norm': [False, False],
-                     'dropout': [0.5, .3],
-                     'activations': [nn.Hardtanh(-1, 1, inplace=True)] * 2}
         learning_rate = 5e-3
         wd_const = 5e-6
         dummy_idx = 'f'
@@ -105,10 +116,7 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits):
                       'num_layers': num_layers,
                       'dropout': 0.0,
                       'batch_norm': False}
-        fc_config = {'num_classes': 1,
-                     'batch_norm': [False],
-                     'dropout': [0]
-                     }
+
         l2pooling_config = {'window': 10, 'stride': 1}
         learning_rate = 5e-3
         wd_const = 5e-6
@@ -124,19 +132,34 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits):
         raise NotImplementedError
 
     rec_names = []
-    for dataset_path in datasets:
-        rec_day_name = os.path.basename(dataset_path).split('.')[0].split('_')
-        rec_names.append('_'.join([rec_day_name[1], rec_day_name[3]]))
+    if task == 'multi':
+        for dataset_path in [dataset[0] for dataset in datasets]:
+            rec_day_name = os.path.basename(dataset_path).split('.')[0].split('_')
+            rec_names.append('_'.join([rec_day_name[1], rec_day_name[3]]))
+    else:
+        for dataset_path in datasets:
+            rec_day_name = os.path.basename(dataset_path).split('.')[0].split('_')
+            rec_names.append('_'.join([rec_day_name[1], rec_day_name[3]]))
 
-    index = pd.MultiIndex.from_product([rec_names, ['fold%d' % fold for fold in range(1,n_splits+1)]],
+    index = pd.MultiIndex.from_product([rec_names, ['fold%d' % fold for fold in range(1, n_splits+1)]],
                                        names=['day', 'fold'])
-    df = pd.DataFrame(index=index, columns=['corr', 'mse'])
+    if task == 'multi':
+        columns = TASK_NAMES + ['mse']
+    else:
+        columns = ['corr', 'mse']
+    df = pd.DataFrame(index=index, columns=columns)
+    df.to_csv(os.path.join(log_dir, 'cv_acc.csv'), index=True)
     for dataset_path, rec_name in zip(datasets, rec_names):
-        msg = str(datetime.now()) + ': Start working on dataset %s:' % dataset_path
+        msg = str(datetime.now()) + ': Start working on dataset %s:' % rec_name if task == 'multi' else dataset_path
         print(msg)
         print('='*len(msg))
         print('='*len(msg))
-        crops, in_channels = read_dataset(dataset_path, crop_len*new_srate_x, stride, dummy_idx)
+        if task == 'multi':
+            crops, in_channels = read_multi_datasets(dataset_path, crop_len*new_srate_x, stride, dummy_idx)
+            num_classes = len(dataset_path)
+        else:
+            crops, in_channels = read_dataset(dataset_path, crop_len*new_srate_x, stride, dummy_idx)
+            num_classes = 1
         print(len(crops), 'trials found!')
         crop_idx = np.arange(len(crops)).squeeze().tolist()
         kfold = KFold(n_splits=n_splits, shuffle=False, random_state=RANDOM_SEED)
@@ -151,6 +174,11 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits):
             print('Validation trials:')
             print(valid_split)
             if model_type == 'rnn':
+                fc_config = {'num_classes': num_classes,
+                             'fc_size': [32, 10],
+                             'batch_norm': [False, False],
+                             'dropout': [0.5, .3],
+                             'activations': [nn.Hardtanh(-1, 1, inplace=True)] * 2}
                 model = HybridModel(in_channels=in_channels, channel_conv_config=channel_config,
                                     time_conv_config=time_config, rnn_config=rnn_config,
                                     fc_config=fc_config, output_stride=int(x2y_ratio))
@@ -159,7 +187,7 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits):
                 loss_fun = WeightedMSE(weights_tensor)
                 metric = CorrCoeff(weights).weighted_corrcoef
             elif model_type == 'deep4':
-                model = Deep4Net(in_chans=in_channels, n_classes=1, input_time_length=crop_len * new_srate_x,
+                model = Deep4Net(in_chans=in_channels, n_classes=num_classes, input_time_length=crop_len * new_srate_x,
                                  final_conv_length=2, stride_before_pool=True).create_network()
 
                 # remove softmax
@@ -182,8 +210,9 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits):
                 optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
                 loss_fun = mse_loss
                 metric = CorrCoeff().corrcoeff
+
             elif model_type == 'shallow':
-                model = Shallow(in_chans=in_channels, n_classes=1, input_time_length=crop_len * new_srate_x,
+                model = Shallow(in_chans=in_channels, n_classes=num_classes, input_time_length=crop_len * new_srate_x,
                                 final_conv_length=2).create_network()
 
                 # remove softmax
@@ -207,6 +236,10 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits):
                 loss_fun = WeightedMSE(weights_tensor)
                 metric = CorrCoeff(weights).weighted_corrcoef
             elif model_type == 'hybrid':
+                fc_config = {'num_classes': num_classes,
+                             'batch_norm': [False],
+                             'dropout': [0]
+                            }
                 channel_config = {
                     'channel_filters': [in_channels]
                 }
@@ -244,8 +277,13 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits):
                                                  valid_loader, valid_writer, weights_path, max_epochs=MAX_EPOCHS,
                                                  eval_train_every=EVAL_TRAIN_EVERY, eval_valid_every=EVAL_VALID_EVERY,
                                                  cuda=CUDA)
-
-            df.loc[(rec_name, 'fold' + str(cross_valid_idx)), :] = [fold_corr, fold_mse]
+            if task == 'multi':
+                for task_idx in range(len(fold_corr)):
+                    df.loc[(rec_name, 'fold' + str(cross_valid_idx)), TASK_NAMES[task_idx]] = \
+                        fold_corr['Class%d' % task_idx]
+                df.loc[(rec_name, 'fold' + str(cross_valid_idx)), 'mse'] = fold_mse
+            else:
+                df.loc[(rec_name, 'fold' + str(cross_valid_idx)), :] = [fold_corr, fold_mse]
             # writes every time just in case it couldn't run the complete script
             df.to_csv(os.path.join(log_dir, 'cv_acc.csv'), index=True)
 
