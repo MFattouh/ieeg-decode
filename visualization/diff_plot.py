@@ -10,9 +10,9 @@ import numpy as np
 from string import ascii_letters
 
 
-def exp_plot(x, y, hue, **kwargs):
+def exp_plot(x, y, hue, order=None, **kwargs):
+    order = [exp for exp in order if exp in set(x.values)]
     ax = plt.gca()
-    order = sorted(set(x), key=lambda exp: int(exp.strip(ascii_letters)))
     sns.stripplot(x=x, y=y, hue=hue, jitter=True, order=order, ax=ax)
     sns.pointplot(x=x, y=y, ax=ax, join=False, estimator=np.mean, order=order, ci='sd',
                   markers='D', linestyles=':', errwidth=1, capsize=0.02)
@@ -46,12 +46,6 @@ def diff_plot(dataset_dir):
         other_experiments = unique_experiments - set([first_exp])
         df_list = []
         for second_exp in other_experiments:
-            if exp_type.lower() == 'layers':
-                order = sorted(other_experiments, key=lambda exp: int(exp.strip(ascii_letters)))
-            # elif exp_type.lower() == 'models':
-            #     order = ['SHALLOW', 'DEEP4', 'RNN']
-            else:
-                order = None
             corr_diff = pd.DataFrame(results[second_exp] - results[first_exp],
                                      columns=['corr_diff']).reset_index()
             corr_diff['exp'] = second_exp
@@ -65,10 +59,16 @@ def diff_plot(dataset_dir):
 
     all_exp_df = pd.concat(all_exp_list).reset_index()
     all_exp_df.drop('index', axis=1, inplace=True)
-    order = sorted(unique_experiments, key=lambda exp: int(exp.strip(ascii_letters)))
+    if exp_type.lower() == 'layers':
+        order = sorted(unique_experiments, key=lambda exp: int(exp.strip(ascii_letters)))
+    else:
+        mean_per_exp = [(all_exp_df.loc[all_exp_df.exp == experiment, 'corr_diff'].mean(), experiment) for experiment in
+                        unique_experiments]
+        order = [exp for _, exp in sorted(mean_per_exp)]
+
     g = sns.FacetGrid(all_exp_df, col='first_exp', sharex=False, size=6, col_order=order
                       )
-    g = (g.map(exp_plot, 'exp', 'corr_diff', 'sub')
+    g = (g.map(exp_plot, 'exp', 'corr_diff', 'sub', order=order)
           .add_legend(title='Subject')
           .set_titles(col_template="{col_name}"))
     g.set_xlabels('')

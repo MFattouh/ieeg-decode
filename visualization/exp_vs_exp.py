@@ -35,10 +35,9 @@ def exp_heatmap(dataset_dir):
 
     if exp_type.lower() == 'layers':
         order = sorted(unique_experiments, key=lambda exp: int(exp.strip(ascii_letters)))
-    elif exp_type.lower() == 'models':
-        order = ['SHALLOW', 'DEEP4', 'RNN']
     else:
-        order = None
+        mean_per_exp = [(results.loc[results.exp == experiment, 'corr'].mean(), experiment) for experiment in set(experiments)]
+        order = [exp for _, exp in sorted(mean_per_exp)]
 
     for first_exp in unique_experiments:
         other_experiments = unique_experiments - set([first_exp])

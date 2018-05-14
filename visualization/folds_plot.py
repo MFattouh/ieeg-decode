@@ -30,16 +30,15 @@ def plot_folds(dataset_dir):
     x_axes_label = 'folds'
     if exp_type.lower() == 'layers':
         hue_order = sorted(set(experiments), key=lambda exp: int(exp.strip(ascii_letters)))
-    elif exp_type.lower() == 'models':
-        hue_order = ['SHALLOW', 'DEEP4', 'RNN']
     else:
-        hue_order = None
+        mean_per_exp = [(results.loc[results.exp == experiment, 'corr'].mean(), experiment) for experiment in set(experiments)]
+        hue_order = [exp for _, exp in sorted(mean_per_exp)]
     for day in days:
-        gp = results[results.day == day]
-        g = sns.factorplot(x='fold', y='corr', hue='exp', kind='bar', size=6, data=gp, legend_out=True,
-                           order=['fold%d' % fold for fold in range(1, n_folds+1)], hue_order=hue_order)
-
-        g.set_axis_labels(x_axes_label, "corr. coeff.")
+        df = results[results.day == day]
+        folds = ['fold%d' % fold for fold in range(1, n_folds+1)]
+        g = sns.factorplot(x='fold', y='corr', hue='exp', kind='bar', size=6, data=df, legend_out=True,
+                           order=folds, hue_order=hue_order)
+        g.set_axis_labels(x_axes_label, "Corr. Coeff.")
         g._legend.set_title('')
         g.savefig(os.path.join(dataset_dir, day+'.png'))
 
