@@ -148,7 +148,6 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits, task):
     else:
         columns = ['corr', 'mse']
     df = pd.DataFrame(index=index, columns=columns)
-    df.to_csv(os.path.join(log_dir, 'cv_acc.csv'), index=True)
     for dataset_path, rec_name in zip(datasets, rec_names):
         msg = str(datetime.now()) + ': Start working on dataset %s:' % rec_name if task == 'multi' else dataset_path
         print(msg)
@@ -186,6 +185,7 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits, task):
                 optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
                 loss_fun = WeightedMSE(weights_tensor)
                 metric = CorrCoeff(weights).weighted_corrcoef
+
             elif model_type == 'deep4':
                 model = Deep4Net(in_chans=in_channels, n_classes=num_classes, input_time_length=crop_len * new_srate_x,
                                  final_conv_length=2, stride_before_pool=True).create_network()
@@ -194,15 +194,23 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits, task):
                 new_model = nn.Sequential()
                 for name, module in model.named_children():
                     if name == 'softmax':
+                       # continue
                         break
                     new_model.add_module(name, module)
 
                 # lets remove empty final dimension
                 def squeeze_out(x):
-                    assert x.size()[1] == 1 and x.size()[3] == 1
-                    return x[:, 0, :, 0]
+                    assert x.size()[1] == num_classes and x.size()[3] == 1
+                    return x[:, :, :, 0]
+                    # assert x.size()[1] == 1 and x.size()[3] == 1
+                    # return x[:, 0, :, 0]
 
                 new_model.add_module('squeeze', Expression(squeeze_out))
+                if num_classes > 1:
+                    def transpose_class_time(x):
+                        return x.transpose(2, 1)
+                    new_model.add_module('trans', Expression(transpose_class_time))
+
                 model = new_model
 
                 to_dense_prediction_model(model)
@@ -223,11 +231,11 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits, task):
                     new_model.add_module(name, module)
 
                 # lets remove empty final dimension
-                def squeeze_out(x):
-                    assert x.size()[1] == 1 and x.size()[3] == 1
-                    return x[:, 0, :, 0]
-
-                new_model.add_module('squeeze', Expression(squeeze_out))
+                # def squeeze_out(x):
+                #     assert x.size()[1] == 1 and x.size()[3] == 1
+                #     return x[:, 0, :, 0]
+                #
+                # new_model.add_module('squeeze', Expression(squeeze_out))
                 model = new_model
 
                 to_dense_prediction_model(model)

@@ -20,8 +20,16 @@ def read_dataset(dataset_path, window, stride, dummy_idx):
                 # read data
                 X = trial['ieeg'][:]
                 y = trial['traj'][:][:].squeeze()
-                datasets_list.append(ECoGDatast(X, y, window, stride, input_shape='ct', dummy_idx=dummy_idx))
+                if X.ndim < 2:
+                    logger.warning('irregular trial shape encountered. Trial%d will be ignored' %idx)
+                    continue
                 in_channels = X.shape[0]
+                if idx == 1:
+                    in_channels = X.shape[0]
+                else:
+                    if in_channels != X.shape[0]:
+                        logger.exception('different channels in different trials %d != %d' % (in_channels, X.shape[0]))
+                datasets_list.append(ECoGDatast(X, y, window, stride, input_shape='ct', dummy_idx=dummy_idx))
             except ValueError as e:
                 logger.warning('exception found while creating dataset object from trial %s \n%s' % (idx, e))
                 continue
@@ -34,33 +42,41 @@ def read_multi_datasets(input_datasets_path, window, stride, dummy_idx):
     with h5py.File(input_datasets_path[0], 'r') as hf:
         trials = [hf[obj_ref] for obj_ref in hf['D'][0]]
         for idx, trial in enumerate(trials, 1):
-            try:
                 # read data
                 X = trial['ieeg'][:]
                 y = trial['traj'][:][:].squeeze()
+                if X.ndim < 2:
+                    logger.warning('irregular trial shape encountered. Trial%d will be ignored' %idx)
+                    continue
                 in_channels = X.shape[0]
+                if idx == 1:
+                    in_channels = X.shape[0]
+                else:
+                    if in_channels != X.shape[0]:
+                        logger.exception('different channels in different trials %d != %d' % (in_channels, X.shape[0]))
+
                 datasets_list.append([X, y])
-            except ValueError as e:
-                logger.warning('exception found while creating dataset object from trial %s \n%s' % (idx, e))
-                continue
 
     for dataset_path in input_datasets_path[1:]:
         with h5py.File(dataset_path, 'r') as hf:
             trials = [hf[obj_ref] for obj_ref in hf['D'][0]]
             for idx, trial in enumerate(trials):
-                try:
                     # read data
                     X = trial['ieeg'][:]
+                    if X.ndim < 2:
+                        logger.warning('irregular trial shape encountered. Trial%d will be ignored' % (idx+1))
+                        continue
                     np.testing.assert_equal(X, datasets_list[idx][0], 'iEEG channels did not match')
                     datasets_list[idx][1] = np.c_[datasets_list[idx][1],
                                                   trial['traj'][:][:].squeeze()]
-                except ValueError as e:
-                    logger.warning('exception found while creating dataset object from trial %s \n%s' % (idx + 1, e))
-                    continue
 
     pytorch_datasets = []
     for dataset in datasets_list:
-        pytorch_datasets.append(ECoGDatast(dataset[0], dataset[1], window, stride, input_shape='ct', dummy_idx=dummy_idx))
+        try:
+            pytorch_datasets.append(ECoGDatast(dataset[0], dataset[1], window, stride, input_shape='ct', dummy_idx=dummy_idx))
+        except ValueError as e:
+            logger.warning('exception found while creating dataset object from trial %s \n%s' % (idx, e))
+            continue
 
     return pytorch_datasets, in_channels
 
@@ -102,7 +118,6 @@ def run_experiment(model, optimizer, loss_fun, metric, training_loader, training
                   'at epoch', epoch)
         if type(train_corr) == dict:
             max_acc = dict(zip(list(train_corr.keys()), [-float('inf')] * len(train_corr)))
-            print(max_acc)
         else:
             max_acc = -float('inf')
         if epoch % eval_valid_every == 0:
