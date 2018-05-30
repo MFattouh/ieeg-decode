@@ -12,6 +12,8 @@ from string import ascii_letters
 @click.command()
 @click.argument('dataset_dir', type=click.Path(exists=True))
 def plot_folds(dataset_dir):
+    sns.set_style("darkgrid")
+    sns.set_palette("muted")
     csv_pathes = glob(os.path.join(dataset_dir, '*/*.csv'))
     assert csv_pathes, 'No csv files found!'
     experiments = [os.path.basename(os.path.dirname(path)) for path in csv_pathes]
