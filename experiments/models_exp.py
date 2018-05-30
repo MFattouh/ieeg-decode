@@ -72,7 +72,7 @@ def main(dataset_dir, subject, model_type, log_dir, n_splits, task):
     # define some constants related to model type
     if model_type == 'rnn':
         hidden_size = 64
-        num_layers = 3
+        num_layers = 2
         channel_config = None
         time_config = None
         weights_dropout = ['weight_ih_l%d' % layer for layer in range(num_layers)]
