@@ -36,8 +36,8 @@ def multi_task_plot(task_dir, kind, palette):
     ax.set_xlabel('')
     ax.set_ylabel('Corr. Coeff.')
     handles, labels = ax.get_legend_handles_labels()
-    plt.legend(handles[0:2], labels[0:2], loc='upper left')
-    fig.savefig(os.path.join(task_dir, kind + '_multi_task.png'), bbox_inches='tight')
+    plt.legend(handles[0:3], labels[0:3], loc='center left', ncol=1, bbox_to_anchor=(1.0, .5))
+    fig.savefig(os.path.join(task_dir, kind + '_multi_task.png'), fancy_box=True, bbox_inches='tight')
 
 
 def create_results_df(task_dir):
