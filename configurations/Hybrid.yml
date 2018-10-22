@@ -1,0 +1,29 @@
+HYBRID:
+  SPATIAL_CONVS:
+    ENABLED: true
+
+  TEMPORAL_CONVS:
+    ENABLED: true
+    NUM_FILTERS: [2, 4, 8]
+    KERNEL_SIZE: [17, 17, 17]
+    ACTIVATIONS: 'tanh'
+    DILATIONS: [1, 2, 4]
+
+  RNN:
+    RNN_TYPE: 'Lstm'
+    HIDDEN_SIZE: 10
+    NUM_LAYERS: 1
+    WEIGHTS_DROPout: []
+    DROPOUT: 0.0
+    NORMALIZATIOn: None
+
+  L2POOLING:
+    ENABLED: true
+    WINDOW: 10
+    STRIDE: 1
+
+  LINEAR:
+    BATCH_NORM: false
+    DROPOUT: [0]
+    FC_SIZE: []
+    ACTIVATIONS: 'tanh'

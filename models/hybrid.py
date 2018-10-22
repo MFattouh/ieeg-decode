@@ -100,7 +100,7 @@ def _drop_last():
 def make_rnn(input_size=0, rnn_type='lstm', normalization=False, dropout=0, weights_dropout=[], max_length=0, hidden_size=10,
              num_layers=1):
     assert rnn_type.lower() in supported_rnns, 'unknown recurrent type'+rnn_type
-    if normalization is None:
+    if normalization == 'None':
         rnns = supported_rnns[rnn_type](input_size=input_size, hidden_size=hidden_size,
                                         num_layers=num_layers, bidirectional=False, bias=True)
     elif normalization == 'batch_norm':
@@ -204,7 +204,7 @@ def make_temporal_convs(batch_norm=None, initializer=None, num_filters=None, ker
 
     temporal_conv = list()
     temporal_conv.append(('conv0', nn.Conv2d(1, num_filters[0], kernel_size=(1, kernel_size[0]), dilation=dilations[0],
-                                         bias=not batch_norm)))
+                                             bias=not batch_norm)))
     if initializer is not None:
         initializer(temporal_conv[-1][1].weight)
 
@@ -213,16 +213,16 @@ def make_temporal_convs(batch_norm=None, initializer=None, num_filters=None, ker
 
     if batch_norm:
         temporal_conv.append(('BN0', nn.BatchNorm2d(num_filters[0])))
-    for layer, (num_filters, kernel, dilation) in \
+    for layer, (layer_filters, kernel, dilation) in \
             enumerate(zip(num_filters[1:], kernel_size[1:], dilations[1:]), 1):
-        temporal_conv.append(('conv%d' % layer, nn.Conv2d(num_filters[layer - 1], num_filters, dilation=dilation,
+        temporal_conv.append(('conv%d' % layer, nn.Conv2d(num_filters[layer - 1], layer_filters, dilation=dilation,
                                                           kernel_size=(1, kernel), bias=not batch_norm)))
         if initializer is not None:
             initializer(temporal_conv[-1][1].weight)
         if activations is not None:
             temporal_conv.append(('activation%d' % layer, activations))
         if batch_norm:
-            temporal_conv.append(('BN%d' % layer, nn.BatchNorm2d(num_filters)))
+            temporal_conv.append(('BN%d' % layer, nn.BatchNorm2d(layer_filters)))
 
     temporal_conv = nn.Sequential(OrderedDict(temporal_conv))
     return temporal_conv
@@ -238,7 +238,7 @@ def make_spatial_conv(in_channels, batch_norm=False, num_filters=None, initializ
 
     channels_conv = list()
     channels_conv.append(('conv0', nn.Conv2d(1, num_filters[0], kernel_size=(in_channels, 1),
-                                             bias=not batch_norm[0])))
+                                             bias=not batch_norm)))
     if initializer is not None:
         initializer(channels_conv[-1][1].weight)
     if activations is not None:
@@ -246,9 +246,9 @@ def make_spatial_conv(in_channels, batch_norm=False, num_filters=None, initializ
     if batch_norm:
         channels_conv.append(('BN0', nn.BatchNorm2d(num_filters[0])))
     if len(num_filters) > 1:
-        for layer, num_filters in enumerate(num_filters[1:], 1):
+        for layer, layer_filters in enumerate(num_filters[1:], 1):
             channels_conv.append(('trans%d1' % layer, _transpose_C_to_W()))
-            channels_conv.append(('conv%d' % layer, nn.Conv2d(1, num_filters,
+            channels_conv.append(('conv%d' % layer, nn.Conv2d(1, layer_filters,
                                                               kernel_size=(num_filters[layer - 1], 1),
                                                               bias=not batch_norm)))
             if initializer is not None:
@@ -256,7 +256,7 @@ def make_spatial_conv(in_channels, batch_norm=False, num_filters=None, initializ
             if activations is not None:
                 channels_conv.append(('activation%d' % layer, activations))
             if batch_norm:
-                channels_conv.append(('BN%d' % layer, nn.BatchNorm2d(num_filters)))
+                channels_conv.append(('BN%d' % layer, nn.BatchNorm2d(layer_filters)))
             channels_conv.append(('trans%d2' % layer, _transpose_C_to_W()))
     else:
         channels_conv.append(('trans0', _transpose_C_to_W()))
@@ -281,16 +281,16 @@ class HybridModel(nn.Module):
         # channels conv. layers. convolutions are done over all channels in the first layer
         # and over all output filters in later layers.
         if cfg.HYBRID.SPATIAL_CONVS.ENABLED:
-            channel_conv_config = cfg.HYBRID.SPATIAL_CONVS.copy()
-            channel_conv_config.pop('ENABLED')
+            channel_conv_config = dict(zip(map(lambda k: k.lower(), cfg.HYBRID.SPATIAL_CONVS.keys()), cfg.HYBRID.SPATIAL_CONVS.values()))
+            channel_conv_config.pop('enabled')
             self.channel_conv = make_spatial_conv(in_channels, **channel_conv_config)
-            rnn_input_size = cfg.HYBRID.SPATIAL_CONVS.channel_filter[-1]
+            rnn_input_size = cfg.HYBRID.SPATIAL_CONVS.num_filters[-1]
         else:
             self.channel_conv = None
             rnn_input_size = in_channels
         # convolution layers over time dimension only
         if cfg.HYBRID.TEMPORAL_CONVS.ENABLED:
-            temporal_conv_config = cfg.HYBRID.TEMPORAL_CONVS.copy()
+            temporal_conv_config = dict(zip(map(lambda k: k.lower(), cfg.HYBRID.TEMPORAL_CONVS.keys()), cfg.HYBRID.TEMPORAL_CONVS.values()))
             temporal_conv_config.pop('ENABLED')
             self.time_conv = make_temporal_convs(**temporal_conv_config)
             rnn_input_size *= cfg.HYBRID.TEMPORAL_CONVS.num_filters[-1]
@@ -298,15 +298,17 @@ class HybridModel(nn.Module):
             self.time_conv = None
 
         if cfg.HYBRID.L2POOLING.ENABLED:
-            l2pooling_config = cfg.HYBRID.L2POOLING.copy()
+            l2pooling_config = dict(zip(map(lambda k: k.lower(), cfg.HYBRID.L2POOLING.keys()), cfg.HYBRID.L2POOLING.values()))
             l2pooling_config.pop('ENABLED')
             self.l2pooling = self.make_l2pooling(**l2pooling_config)
         else:
             self.l2pooling = None
 
-        self.rnns = make_rnn(rnn_input_size, **cfg.HYBRID.RNN)
+        rnns_configs = dict(zip(map(lambda k: k.lower(), cfg.HYBRID.RNN.keys()), cfg.HYBRID.RNN.values()))
+        self.rnns = make_rnn(rnn_input_size, **rnns_configs)
 
-        self.fc = make_fc(cfg.HYBRID.RNN.hidden_size, **cfg.HYBRID.LINEAR)
+        linear_configs = dict(zip(map(lambda k: k.lower(), cfg.HYBRID.LINEAR.keys()), cfg.HYBRID.LINEAR.values()))
+        self.fc = make_fc(cfg.HYBRID.RNN.HIDDEN_SIZE, **linear_configs)
 
     def forward(self, x, hidden=None):
         # x is expected to be Nx1xCxT

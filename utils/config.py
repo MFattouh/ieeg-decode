@@ -7,42 +7,45 @@ __C.HYBRID = dict()
 # Spatial filters configurations
 __C.HYBRID.SPATIAL_CONVS = dict()
 __C.HYBRID.SPATIAL_CONVS.ENABLED = False
-__C.HYBRID.SPATIAL_CONVS.num_filters = []  # number of output filters for each layer
-__C.HYBRID.SPATIAL_CONVS.kernel_size = []  # kernel size for each layer
-__C.HYBRID.SPATIAL_CONVS.batch_norm = False
-__C.HYBRID.SPATIAL_CONVS.activations = 'tanh'
+__C.HYBRID.SPATIAL_CONVS.NUM_FILTERS = []  # number of output filters for each layer
+__C.HYBRID.SPATIAL_CONVS.BATCH_NORM = False
+__C.HYBRID.SPATIAL_CONVS.ACTIVATIONS = 'tanh'
 
 # Temporal filters configurations
 __C.HYBRID.TEMPORAL_CONVS = dict()
 __C.HYBRID.TEMPORAL_CONVS.ENABLED = False
-__C.HYBRID.TEMPORAL_CONVS.num_filters = []  # number of output filters for each layer
-__C.HYBRID.TEMPORAL_CONVS.batch_norm = False
-__C.HYBRID.TEMPORAL_CONVS.activations = 'tanh'
+__C.HYBRID.TEMPORAL_CONVS.NUM_FILTERS = []  # number of output filters for each layer
+__C.HYBRID.TEMPORAL_CONVS.BATCH_NORM = False
+__C.HYBRID.TEMPORAL_CONVS.ACTIVATIONS = 'tanh'
 
 # RNN configs
 __C.HYBRID.RNN = dict()
-__C.HYBRID.RNN.rnn_type = 'gru'
-__C.HYBRID.RNN.normalization = None  # 'batch_norm' is supported, 'weight_norm' will be supported soon
-__C.HYBRID.RNN.dropout = 0.3  # or a list of values
-__C.HYBRID.RNN.weights_dropout = ['weight_ih_l0', 'weight_ih_l1', 'weight_ih_l2', 'weight_hh_l0', 'weight_hh_l1', 'weight_hh_l2']
-__C.HYBRID.RNN.max_length = 0  # maximum sequence length (required for BNLSTM)
-__C.HYBRID.RNN.hidden_size = 64
-__C.HYBRID.RNN.num_layers = 3
+__C.HYBRID.RNN.RNN_TYPE = 'gru'
+__C.HYBRID.RNN.NORMALIZATION = None  # 'batch_norm' is supported, 'weight_norm' will be supported soon
+__C.HYBRID.RNN.DROPOUT = 0           # or a list of values
+__C.HYBRID.RNN.WEIGHTS_DROPOut = []  # ['weight_ih_l0', 'weight_ih_l1', 'weight_ih_l2', 'weight_hh_l0', 'weight_hh_l1', 'weight_hh_l2']
+__C.HYBRID.RNN.MAX_LENGTH = 0        # maximum sequence length (required for BNLSTM)
+__C.HYBRID.RNN.HIDDEN_SIZE = 64
+__C.HYBRID.RNN.NUM_LAYERS = 3
 
 # L2POOLING
 __C.HYBRID.L2POOLING = dict()
 __C.HYBRID.L2POOLING.ENABLED = False
-__C.HYBRID.L2POOLING.window = 10
-__C.HYBRID.L2POOLING.stride = 1
+__C.HYBRID.L2POOLING.WINDOW = 0
+__C.HYBRID.L2POOLING.STRIDE = 0
 
 __C.HYBRID.LINEAR = dict()
-__C.HYBRID.LINEAR.batch_norm = False
-__C.HYBRID.LINEAR.dropout = [0.5, 0.3]
-__C.HYBRID.LINEAR.fc_size = [32, 10]
-__C.HYBRID.LINEAR.activations = 'tanh'
+__C.HYBRID.LINEAR.BATCH_NORM = False
+__C.HYBRID.LINEAR.DROPOUT = []  # [0.5, 0.3]
+__C.HYBRID.LINEAR.FC_SIZE = []  # [32, 10]
+__C.HYBRID.LINEAR.ACTIVATIONS = 'tanh'
 
 __C.TRAINING = dict()
 __C.TRAINING.RANDOM_SEED = 10418
+__C.TRAINING.INPUT_SAMPLING_RATE = 250   # [Hz]
+__C.TRAINING.OUTPUT_SAMPLING_RATE = 250  # [Hz]
+__C.TRAINING.CROP_LEN = 16  # [sec]
+__C.TRAINING.BATCH_SIZE = 32
 
 __C.OPTIMIZATION = dict()
 __C.OPTIMIZATION.OPTIMIZER = 'adam'

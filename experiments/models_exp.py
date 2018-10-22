@@ -17,8 +17,8 @@ from braindecode.torch_ext.modules import Expression
 from braindecode.models.deep4 import Deep4Net
 from braindecode.models.shallow_fbcsp import ShallowFBCSPNet as Shallow
 from torch.nn.functional import mse_loss
-from utils.config import cfg
-
+from utils.config import cfg, merge_configs
+import yaml
 
 MAX_EPOCHS = 1000
 EVAL_TRAIN_EVERY = 50
@@ -35,6 +35,7 @@ TASK_NAMES = ['POS', 'VEL']
 @click.argument('dataset_dir', type=click.Path(exists=True))
 @click.argument('subject', type=str)
 @click.option('--log_dir', '-l', type=click.Path(), default=os.path.curdir)
+@click.option('--configs', '-c', type=click.Path(), default=os.path.curdir)
 @click.option('--model_type', '-m', type=click.Choice(['rnn', 'deep4', 'shallow', 'hybrid']), default='rnn')
 @click.option('--n_splits', default=5, help='Number of cross-validation splits')
 @click.option('--task', '-t', type=click.Choice(['xpos', 'xvel', 'abspos', 'absvel', 'multi']), default='xpos',
@@ -45,7 +46,11 @@ TASK_NAMES = ['POS', 'VEL']
                    '* absvel for absolute velocity decoding.\n'
                    '* multi for multi-task decoding.\n'
                    'default is pos')
-def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task):
+def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, configs):
+    if configs is not None:
+        with open(configs, 'r') as f:
+            merge_configs(yaml.load(f))
+
     if exp_type == 'eval':
         train_path = os.path.join(log_dir, task.upper(), 'TRAIN', subject, model_type.upper())
         assert os.path.exists(train_path), f"Can't detect training folder: {train_path}"
@@ -73,13 +78,13 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task):
     else:
         raise KeyError
     assert len(datasets) > 0, 'no datasets for subject %s found!' % subject
-    new_srate_x = 250
-    new_srate_y = 250
+    new_srate_x = cfg.TRAINING.INPUT_SAMPLING_RATE
+    new_srate_y = cfg.TRAINING.OUTPUT_SAMPLING_RATE
     x2y_ratio = new_srate_x / new_srate_y
-    batch_size = 32
+    batch_size = cfg.TRAINING.BATCH_SIZE
 
     # window size
-    crop_len = 16  # [sec]
+    crop_len = cfg.TRAINING.CROP_LEN  # [sec]
     num_relaxed_samples = 681  # int(relax_window * new_srate_x)
 
     stride = crop_len * new_srate_x - num_relaxed_samples
@@ -88,31 +93,29 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task):
         learning_rate = cfg.OPTIMIZATION.BASE_LR
         wd_const = cfg.OPTIMIZATION.WEIGHT_DECAY
         dummy_idx = 'f'
-        weights = make_weights(crop_len * new_srate_x, num_relaxed_samples, type='step')
+        weights = make_weights(crop_len, num_relaxed_samples, type='step')
         weights_tensor = torch.from_numpy(weights)
         if CUDA:
             weights_tensor = weights_tensor.cuda()
     elif model_type == 'deep4':
-        learning_rate = 1e-4
+        learning_rate = 1e-4    # value from robin's script
         wd_const = 0
         dummy_idx = 'l'
     elif model_type == 'shallow':
         wd_const = 0
         dummy_idx = 'l'
-        learning_rate = 1e-4
+        learning_rate = 1e-4    # value from robin's script
         num_dropped_samples = 113
-        weights = make_weights(crop_len * new_srate_x - num_dropped_samples, num_relaxed_samples - num_dropped_samples,
-                               type='step')
+        weights = make_weights(crop_len - num_dropped_samples, num_relaxed_samples - num_dropped_samples, type='step')
         weights_tensor = torch.from_numpy(weights)
         if CUDA:
             weights_tensor = weights_tensor.cuda()
     elif model_type == 'hybrid':
-        learning_rate = 5e-3
-        wd_const = 5e-6
+        learning_rate = 5e-3    # value from paper
+        wd_const = 5e-6         # value from paper
         dummy_idx = 'f'
         num_dropped_samples = 121
-        weights = make_weights(crop_len * new_srate_x - num_dropped_samples, num_relaxed_samples - num_dropped_samples,
-                               type='step')
+        weights = make_weights(crop_len - num_dropped_samples, num_relaxed_samples - num_dropped_samples, type='step')
         weights_tensor = torch.from_numpy(weights)
         if CUDA:
             weights_tensor = weights_tensor.cuda()
@@ -152,10 +155,10 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task):
         else:
             dataset_name = 'F'
         if task == 'multi':
-            crops, in_channels = read_multi_datasets(dataset_path, dataset_name, crop_len*new_srate_x, stride, dummy_idx)
+            crops, in_channels = read_multi_datasets(dataset_path, dataset_name, crop_len, stride, dummy_idx)
             num_classes = len(dataset_path)
         else:
-            crops, in_channels = read_dataset(dataset_path, dataset_name, crop_len*new_srate_x, stride, dummy_idx)
+            crops, in_channels = read_dataset(dataset_path, dataset_name, crop_len, stride, dummy_idx)
             num_classes = 1
         print(len(crops), 'trials found!')
         # create the model
@@ -167,7 +170,7 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task):
             metric = CorrCoeff(weights).weighted_corrcoef
 
         elif model_type == 'deep4':
-            model = Deep4Net(in_chans=in_channels, n_classes=num_classes, input_time_length=crop_len * new_srate_x,
+            model = Deep4Net(in_chans=in_channels, n_classes=num_classes, input_time_length=crop_len,
                              final_conv_length=2, stride_before_pool=True).create_network()
 
             # remove softmax
@@ -200,7 +203,7 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task):
             metric = CorrCoeff().corrcoeff
 
         elif model_type == 'shallow':
-            model = Shallow(in_chans=in_channels, n_classes=num_classes, input_time_length=crop_len * new_srate_x,
+            model = Shallow(in_chans=in_channels, n_classes=num_classes, input_time_length=crop_len,
                             final_conv_length=2).create_network()
 
             # remove softmax
@@ -225,7 +228,7 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task):
             loss_fun = WeightedMSE(weights_tensor)
             metric = CorrCoeff(weights).weighted_corrcoef
         elif model_type == 'hybrid':
-            cfg.HYBRID.SPATIAL_CONV['channel_filters'] = [in_channels]
+            cfg.HYBRID.SPATIAL_CONVS['num_filters'] = [in_channels]
             model = HybridModel(in_channels=in_channels, output_stride=int(x2y_ratio))
 
             optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
@@ -305,7 +308,7 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task):
             training_writer.add_text('Description', model_type.upper())
             training_writer.add_text('Learning Rate', str(learning_rate))
             training_writer.add_text('Weight Decay', str(wd_const))
-            training_writer.add_text('Crop Length[sec]', str(crop_len))
+            training_writer.add_text('Crop Length', str(crop_len))
             training_writer.add_text('Input srate[Hz]', str(new_srate_x))
             training_writer.add_text('Output srate[Hz]', str(new_srate_y))
             training_writer.add_text('relaxed samples', str(num_relaxed_samples))
@@ -315,7 +318,7 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task):
             valid_writer.add_text('Description', model_type.upper())
             valid_writer.add_text('Learning Rate', str(learning_rate))
             valid_writer.add_text('Weight Decay', str(wd_const))
-            valid_writer.add_text('Crop Length[sec]', str(crop_len))
+            valid_writer.add_text('Crop Length', str(crop_len))
             valid_writer.add_text('Input srate[Hz]', str(new_srate_x))
             valid_writer.add_text('Output srate[Hz]', str(new_srate_y))
             valid_writer.add_text('relaxed samples', str(num_relaxed_samples))
