@@ -5,16 +5,17 @@ from models.hybrid import *
 import h5py
 import logging
 from datetime import datetime
+import os
 
 FORMAT = '%(asctime)-15s %(message)s'
 logging.basicConfig(format=FORMAT)
 logger = logging.getLogger('__name__')
 
 
-def read_dataset(dataset_path, window, stride, dummy_idx):
+def read_dataset(dataset_path, dataset_name, window, stride, dummy_idx):
     datasets_list = []
     with h5py.File(dataset_path, 'r') as hf:
-        trials = [hf[obj_ref] for obj_ref in hf['D'][0]]
+        trials = [hf[obj_ref] for obj_ref in hf[dataset_name][0]]
         for idx, trial in enumerate(trials, 1):
             try:
                 # read data
@@ -37,10 +38,10 @@ def read_dataset(dataset_path, window, stride, dummy_idx):
     return datasets_list, in_channels
 
 
-def read_multi_datasets(input_datasets_path, window, stride, dummy_idx):
+def read_multi_datasets(input_datasets_path, dataset_name, window, stride, dummy_idx):
     datasets_list = []
     with h5py.File(input_datasets_path[0], 'r') as hf:
-        trials = [hf[obj_ref] for obj_ref in hf['D'][0]]
+        trials = [hf[obj_ref] for obj_ref in hf[dataset_name][0]]
         for idx, trial in enumerate(trials, 1):
                 # read data
                 X = trial['ieeg'][:]
@@ -104,8 +105,19 @@ def make_weights(crop_len, num_relaxed_samples, type='qubic'):
         return weights
 
 
+def run_eval(model, loss_fun, metric, valid_loader, weights_path, cuda):
+    assert os.path.exists(weights_path), 'weights_path does not exists'
+    model.load_state_dict(torch.load(weights_path))
+    valid_loss, valid_corr = evaluate(model, valid_loader, loss_fun, metric, keep_state=False, cuda=cuda)
+    return valid_corr, valid_loss
+
+
 def run_experiment(model, optimizer, loss_fun, metric, training_loader, training_writer, valid_loader, valid_writer,
                    weights_path, max_epochs, eval_train_every, eval_valid_every, cuda):
+    if os.path.exists(weights_path):
+        model.load_state_dict(torch.load(weights_path))
+        path, ext = os.path.splitext(weights_path)
+        weights_path = path + '_best' + ext
     min_loss = float('inf')
     for epoch in range(max_epochs+1):
         # scheduler.step()
