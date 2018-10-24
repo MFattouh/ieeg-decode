@@ -255,7 +255,7 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
             kfold = KFold(n_splits=n_splits, shuffle=False, random_state=cfg.TRAINING.RANDOM_SEED)
 
             for fold_idx, (train_split, valid_split) in enumerate(kfold.split(crop_idx), 1):
-                training_loader, valid_loader = create_loader(crops, train_split, valid_split, batch_size)
+                training_loader, valid_loader = create_loaders(crops, train_split, valid_split, batch_size)
                 msg = str(f'FOLD{fold_idx}:')
                 logger.info(msg)
                 logger.info('='*len(msg))
@@ -298,8 +298,7 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
             train_split = list(np.arange(0, num_crops - 2))
             valid_split = list(np.arange(num_crops - 2, num_crops))
 
-
-            training_loader, valid_loader = create_loader(crops, train_split, valid_split, batch_size)
+            training_loader, valid_loader = create_loaders(crops, train_split, valid_split, batch_size)
 
             # print(num_classes)
             # print(in_channels)

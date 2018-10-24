@@ -80,7 +80,7 @@ def read_multi_datasets(input_datasets_path, dataset_name, window, stride, x2y_r
     return pytorch_datasets, in_channels
 
 
-def create_loader(datasets, train_split, valid_split, batch_size):
+def create_loaders(datasets, train_split, valid_split, batch_size):
     training_dataset = ConcatDataset([datasets[idx] for idx in train_split])
     training_loader = DataLoader(training_dataset, batch_size=batch_size, shuffle=True, drop_last=False, num_workers=2)
     valid_dataset= ConcatDataset([datasets[idx] for idx in valid_split])
