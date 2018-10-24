@@ -96,7 +96,9 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
     crop_len = cfg.TRAINING.CROP_LEN  # [sec]
     num_relaxed_samples = 681  # int(relax_window * new_srate_x)
 
-    stride = crop_len * new_srate_x - num_relaxed_samples
+    # stride = crop_len - num_relaxed_samples
+    stride = cfg.TRAINING.INPUT_STRIDE
+
     # define some constants related to model type
     if model_type == 'rnn':
         learning_rate = cfg.OPTIMIZATION.BASE_LR
@@ -162,15 +164,15 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
         else:
             dataset_name = 'F'
         if task == 'multi':
-            crops, in_channels = read_multi_datasets(dataset_path, dataset_name, crop_len, stride, dummy_idx)
+            crops, in_channels = read_multi_datasets(dataset_path, dataset_name, crop_len, stride, x2y_ratio, dummy_idx)
             num_classes = len(dataset_path)
         else:
-            crops, in_channels = read_dataset(dataset_path, dataset_name, crop_len, stride, dummy_idx)
+            crops, in_channels = read_dataset(dataset_path, dataset_name, crop_len, stride, x2y_ratio, dummy_idx)
             num_classes = 1
         logger.info(f'{len(crops)} trials found!')
         # create the model
         if model_type == 'rnn':
-            model = HybridModel(in_channels=in_channels, output_stride=int(x2y_ratio))
+            model = HybridModel(in_channels=in_channels, output_stride=int(cfg.HYBRID.OUTPUT_STRIDE))
 
             optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
             loss_fun = WeightedMSE(weights_tensor)
@@ -236,7 +238,7 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
             metric = CorrCoeff(weights).weighted_corrcoef
         elif model_type == 'hybrid':
             cfg.HYBRID.SPATIAL_CONVS['num_filters'] = [in_channels]
-            model = HybridModel(in_channels=in_channels, output_stride=int(x2y_ratio))
+            model = HybridModel(in_channels=in_channels, output_stride=int(cfg.HYBRID.OUTPUT_STRIDE))
 
             optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
             loss_fun = WeightedMSE(weights_tensor)
@@ -346,10 +348,11 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
 
             df.to_csv(os.path.join(log_dir, 'cv_acc.csv'), index=True)
 
+        # eval
         else:
             weights_path = os.path.join(train_path, rec_name, 'weights.pt')
             assert os.path.exists(weights_path), 'No weights are detected for this recording!'
-            valid_dataset= ConcatDataset(crops)
+            valid_dataset = ConcatDataset(crops)
             valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, drop_last=False, num_workers=2)
 
             corr, mse = run_eval(model, loss_fun, metric, valid_loader, weights_path, cuda=CUDA)

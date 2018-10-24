@@ -9,7 +9,7 @@ import os
 logger = logging.getLogger('__name__')
 
 
-def read_dataset(dataset_path, dataset_name, window, stride, dummy_idx):
+def read_dataset(dataset_path, dataset_name, window, stride, x2y_ratio, dummy_idx):
     datasets_list = []
     with h5py.File(dataset_path, 'r') as hf:
         trials = [hf[obj_ref] for obj_ref in hf[dataset_name][0]]
@@ -27,7 +27,7 @@ def read_dataset(dataset_path, dataset_name, window, stride, dummy_idx):
                 else:
                     if in_channels != X.shape[0]:
                         logger.exception('different channels in different trials %d != %d' % (in_channels, X.shape[0]))
-                datasets_list.append(ECoGDatast(X, y, window, stride, input_shape='ct', dummy_idx=dummy_idx))
+                datasets_list.append(ECoGDatast(X, y, window, stride, x2y_ratio=x2y_ratio, input_shape='ct', dummy_idx=dummy_idx))
             except ValueError as e:
                 logger.warning('exception found while creating dataset object from trial %s \n%s' % (idx, e))
                 continue
@@ -35,7 +35,7 @@ def read_dataset(dataset_path, dataset_name, window, stride, dummy_idx):
     return datasets_list, in_channels
 
 
-def read_multi_datasets(input_datasets_path, dataset_name, window, stride, dummy_idx):
+def read_multi_datasets(input_datasets_path, dataset_name, window, stride, x2y_ratio, dummy_idx):
     datasets_list = []
     with h5py.File(input_datasets_path[0], 'r') as hf:
         trials = [hf[obj_ref] for obj_ref in hf[dataset_name][0]]
@@ -71,7 +71,8 @@ def read_multi_datasets(input_datasets_path, dataset_name, window, stride, dummy
     pytorch_datasets = []
     for dataset in datasets_list:
         try:
-            pytorch_datasets.append(ECoGDatast(dataset[0], dataset[1], window, stride, input_shape='ct', dummy_idx=dummy_idx))
+            pytorch_datasets.append(ECoGDatast(dataset[0], dataset[1], window, stride, x2y_ratio=x2y_ratio,
+                                               input_shape='ct', dummy_idx=dummy_idx))
         except ValueError as e:
             logger.warning('exception found while creating dataset object from trial %s \n%s' % (idx, e))
             continue

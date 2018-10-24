@@ -23,10 +23,12 @@ __C.HYBRID.RNN = dict()
 __C.HYBRID.RNN.RNN_TYPE = 'gru'
 __C.HYBRID.RNN.NORMALIZATION = None  # 'batch_norm' is supported, 'weight_norm' will be supported soon
 __C.HYBRID.RNN.DROPOUT = 0           # or a list of values
-__C.HYBRID.RNN.WEIGHTS_DROPOut = []  # ['weight_ih_l0', 'weight_ih_l1', 'weight_ih_l2', 'weight_hh_l0', 'weight_hh_l1', 'weight_hh_l2']
+__C.HYBRID.RNN.WEIGHTS_DROPOUT = []  # ['weight_ih_l0', 'weight_ih_l1', 'weight_ih_l2', 'weight_hh_l0', 'weight_hh_l1', 'weight_hh_l2']
 __C.HYBRID.RNN.MAX_LENGTH = 0        # maximum sequence length (required for BNLSTM)
 __C.HYBRID.RNN.HIDDEN_SIZE = 64
 __C.HYBRID.RNN.NUM_LAYERS = 3
+
+__C.HYBRID.OUTPUT_STRIDE = 1
 
 # L2POOLING
 __C.HYBRID.L2POOLING = dict()
@@ -42,9 +44,10 @@ __C.HYBRID.LINEAR.ACTIVATIONS = 'tanh'
 
 __C.TRAINING = dict()
 __C.TRAINING.RANDOM_SEED = 10418
-__C.TRAINING.INPUT_SAMPLING_RATE = 250   # [Hz]
-__C.TRAINING.OUTPUT_SAMPLING_RATE = 250  # [Hz]
-__C.TRAINING.CROP_LEN = 16 * 250    # 16 [sec]
+__C.TRAINING.INPUT_SAMPLING_RATE = 250      # [Hz]
+__C.TRAINING.OUTPUT_SAMPLING_RATE = 250     # [Hz]
+__C.TRAINING.CROP_LEN = 16 * 250            # [samples] default to number of samples in 16 [sec]
+__C.TRAINING.INPUT_STRIDE = 16 * 250 - 681  # [samples]
 __C.TRAINING.BATCH_SIZE = 32
 
 __C.OPTIMIZATION = dict()
