@@ -25,6 +25,8 @@ supported_init = {
 
 }
 
+logger = logging.getLogger(__name__)
+
 # from https://github.com/robintibor/braindecode/blob/master/braindecode/torch_ext/modules.py
 class Expression(torch.nn.Module):
     """

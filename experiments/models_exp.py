@@ -7,6 +7,9 @@ os.sys.path.insert(0, '..')
 from utils.experiment_util import *
 from tensorboardX import SummaryWriter
 from torch import optim
+import yaml
+import logging
+import json
 import h5py
 from glob import glob
 from sklearn.model_selection import KFold
@@ -28,6 +31,8 @@ EXPERIMENT_NAME = 'models'
 np.random.seed(cfg.TRAINING.RANDOM_SEED)
 torch.manual_seed(cfg.TRAINING.RANDOM_SEED)
 TASK_NAMES = ['POS', 'VEL']
+
+logger = logging.getLogger(__name__)
 
 
 @click.command(name='models-experiments')
@@ -59,6 +64,10 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
     if not os.path.isdir(log_dir):
         os.makedirs(log_dir)
 
+    logging.basicConfig(level=logging.DEBUG, filename=os.path.join(log_dir, 'log.o'), filemode='w+',
+                        format='%(levelname)s %(filename)s:%(lineno)4d: %(message)s')
+    logger.info('Called with configs:')
+    logger.info(json.dumps(cfg, indent=2))
     datasets = []
     if task == 'xpos':
         datasets = glob(dataset_dir + '*' + subject+'_*_xpos.mat')
@@ -146,10 +155,8 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
 
     df = pd.DataFrame(index=index, columns=columns)
     for dataset_path, rec_name in zip(datasets, rec_names):
-        msg = str(datetime.now()) + ': Start working on dataset %s:' % rec_name if task == 'multi' else dataset_path
-        print(msg)
-        print('='*len(msg))
-        print('='*len(msg))
+        msg = str('Working on dataset %s:' % rec_name if task == 'multi' else dataset_path)
+        logger.info(msg + '\n' + '=' * len(msg) + '\n' + '=' * len(msg))
         if exp_type == 'cv' or exp_type == 'train':
             dataset_name = 'D'
         else:
@@ -160,7 +167,7 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
         else:
             crops, in_channels = read_dataset(dataset_path, dataset_name, crop_len, stride, dummy_idx)
             num_classes = 1
-        print(len(crops), 'trials found!')
+        logger.info(f'{len(crops)} trials found!')
         # create the model
         if model_type == 'rnn':
             model = HybridModel(in_channels=in_channels, output_stride=int(x2y_ratio))
@@ -247,13 +254,13 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
 
             for fold_idx, (train_split, valid_split) in enumerate(kfold.split(crop_idx), 1):
                 training_loader, valid_loader = create_loader(crops, train_split, valid_split, batch_size)
-                msg = str(datetime.now()) + ': FOLD%d:' % fold_idx
-                print(msg)
-                print('='*len(msg))
-                print('Training trials:')
-                print(train_split)
-                print('Validation trials:')
-                print(valid_split)
+                msg = str(f'FOLD{fold_idx}:')
+                logger.info(msg)
+                logger.info('='*len(msg))
+                logger.info('Training trials:')
+                logger.info(train_split)
+                logger.info('Validation trials:')
+                logger.info(valid_split)
 
                 # scheduler = StepLR(optimizer, step_size=100, gamma=0.9)
                 training_writer = SummaryWriter(os.path.join(log_dir, rec_name, 'fold' + str(fold_idx), 'train'))

@@ -4,11 +4,8 @@ from utils.pytorch_util import *
 from models.hybrid import *
 import h5py
 import logging
-from datetime import datetime
 import os
 
-FORMAT = '%(asctime)-15s %(message)s'
-logging.basicConfig(format=FORMAT)
 logger = logging.getLogger('__name__')
 
 
@@ -125,9 +122,9 @@ def run_experiment(model, optimizer, loss_fun, metric, training_loader, training
         if epoch % eval_train_every == 0:
             train_loss, train_corr = evaluate(model, training_loader, loss_fun, metric, keep_state=False,
                                               writer=training_writer, epoch=epoch, cuda=cuda)
-            print(str(datetime.now()),
-                  ': training loss value', train_loss, 'training corr', train_corr,
-                  'at epoch', epoch)
+            logger.info(f"===========epoch: {epoch}=============")
+            logger.info(f'training loss value: {train_loss}')
+            logger.info(f'training corr: {train_corr}')
         if type(train_corr) == dict:
             max_acc = dict(zip(list(train_corr.keys()), [-float('inf')] * len(train_corr)))
         else:
@@ -136,13 +133,14 @@ def run_experiment(model, optimizer, loss_fun, metric, training_loader, training
             valid_loss, valid_corr = evaluate(model, valid_loader, loss_fun, metric, keep_state=False,
                                               writer=valid_writer, epoch=epoch, cuda=cuda)
 
-            print(str(datetime.now()),
-                  ': valid loss value', valid_loss, 'valid corr', valid_corr,
-                  'at epoch', epoch)
+            if epoch % eval_train_every != 0:
+                logger.info(f"===========epoch: {epoch}=============")
+
+            logger.info(f'valid loss value: {valid_loss}')
+            logger.info(f'valid corr: {valid_corr}')
 
             if valid_loss < min_loss:
-                print(str(datetime.now()),
-                      ': found new valid loss value', valid_loss, 'at epoch', epoch)
+                logger.info(f'found new valid loss value: {valid_loss}')
                 # save model parameters
                 torch.save(model.state_dict(), weights_path)
                 min_loss = valid_loss
@@ -166,7 +164,7 @@ def run_experiment(model, optimizer, loss_fun, metric, training_loader, training
                 break
 
     # report last acc
-    print(str(datetime.now()),
-          ':final valid loss:', valid_loss, 'final valid corr', valid_corr)
+    logger.info(f'final valid loss: {valid_loss}')
+    logger.info(f'final valid corr: {valid_corr}')
 
     return max_acc, min_loss
