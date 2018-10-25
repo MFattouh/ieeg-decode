@@ -308,8 +308,6 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
 
             weights_path = os.path.join(log_dir, rec_name, 'weights.pt')
 
-            training_dataset = ConcatDataset(crops)
-            training_loader = DataLoader(training_dataset, batch_size=batch_size, shuffle=True, drop_last=False, num_workers=2)
             # scheduler = StepLR(optimizer, step_size=100, gamma=0.9)
             training_writer = SummaryWriter(os.path.join(log_dir, rec_name, 'train'))
             # training_writer.add_text('Model parameters', str(HybridModel.get_meta(model)))
