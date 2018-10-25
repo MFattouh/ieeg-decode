@@ -1,5 +1,6 @@
 from collections import OrderedDict
 
+import logging
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
@@ -379,7 +380,7 @@ def train(model, data_loader, optimizer, loss_fun, keep_state=False, clip=0, cud
         loss = loss_fun(output.squeeze(), target[:, -seq_len:].squeeze())
         loss.backward()
         if clip > 0:
-            torch.nn.utils.clip_grad_norm(model.parameters(), clip)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
 
         optimizer.step()
 
@@ -389,16 +390,21 @@ def evaluate(model, data_loader, loss_fun, metric, keep_state=False, writer=None
 
     # loop over the dataset
     avg_loss = 0
+    targets = []
+    preds = []
+    with torch.no_grad():
     for itr, (data, target_cpu) in enumerate(data_loader):
-        # data, target = Variable(data.transpose(1, 0)), Variable(target_cpu.squeeze(0))
-        data, target = Variable(data), Variable(target_cpu)
+            data, target = Variable(data), Variable(target_cpu)
         if cuda:
-            data, target = data.cuda(), target.cuda()
+                data, target = data.cuda(), target.cuda()
 
-        if keep_state:
-            if model.rnn_type == 'lstm':
-                for h in hidden:
-                    h.detach_()
+            if keep_state:
+                if itr == 0:
+                    hidden = None
+                else:
+                    if model.rnn_type == 'lstm':
+                        for h in hidden:
+                            h.detach_()
             else:
                 hidden.detach_()
             output, hidden = model(data, hidden)  # NxTxnum_classes
@@ -407,17 +413,13 @@ def evaluate(model, data_loader, loss_fun, metric, keep_state=False, writer=None
 
         output_size = list(output.size())
         seq_len = output_size[1] if len(output_size) > 1 else output_size[0]
-        batch_size = output_size[0] if len(output_size) > 1 else 1
-        num_classes = output_size[2] if len(output_size) > 2 else 1
-        # print(output_size)
-        # print(seq_len)
-        # print(batch_size)
-        # print(num_classes)
-        # exit()
-        avg_loss += loss_fun(output.squeeze(), target[:, -seq_len:].squeeze()).data.cpu().numpy().squeeze()
-        # compute the correlation coff. for each seq. in batch
-        target = target_cpu[:, -seq_len:].numpy().squeeze()
-        output = output.data.cpu().numpy().squeeze()
+            batch_size = output_size[0] if len(output_size) > 1 else 1
+            num_classes = output_size[2] if len(output_size) > 2 else 1
+            avg_loss += loss_fun(output.squeeze(), target[:, -seq_len:].squeeze()).detach().cpu().numpy().squeeze()
+            # compute the correlation coff. for each seq. in batch
+            target = target_cpu[:, -seq_len:].numpy().squeeze()
+            output = output.detach().cpu().numpy().squeeze()
+            if seq_len > 1:
         if itr == 0:
             cum_corr = np.zeros((num_classes, 1))
             valid_corr = np.zeros((num_classes, 1))
@@ -431,17 +433,35 @@ def evaluate(model, data_loader, loss_fun, metric, keep_state=False, writer=None
                 # compute correlation, apply fisher's transform
                 corr = np.arctanh(metric(target[:, :, class_idx], output[:, :, class_idx]))
                 if not np.isnan(corr):
-                    cum_corr[class_idx] += corr
-                    valid_corr[class_idx] += 1
+                            cum_corr[class_idx] += corr
+                            valid_corr[class_idx] += 1
+
+            # one sample per-sequence -> store results and compute corr. at once
+            else:
+                targets.append(target)
+                preds.append(output)
 
     if keep_state:
         avg_loss /= len(data_loader.dataset)
     else:
         avg_loss /= len(data_loader)
 
-    if num_classes == 1:
-        avg_corr = np.tanh(cum_corr.squeeze() / valid_corr.squeeze()).mean()
+    if seq_len == 1:
+        targets = np.concatenate(targets, axis=0).squeeze()
+        preds = np.concatenate(preds, axis=0).squeeze()
+        num_classes = targets.shape[-1] if len(targets.shape) > 1 else 1
+        if num_classes > 1:
+            avg_corr = dict()
+            for class_idx in range(num_classes):
+                # compute correlation, apply fisher's transform
+                avg_corr[f"Class{class_idx}"] = metric(targets[:, class_idx], preds[:, class_idx])
+        else:
+            avg_corr = metric(targets, preds)
+
     else:
+        if num_classes == 1:
+            avg_corr = np.tanh(cum_corr.squeeze() / valid_corr.squeeze()).mean()
+        else:
         avg_corr = dict()
         for i in range(num_classes):
             avg_corr['Class%d' % i] = np.tanh(cum_corr[i] / valid_corr[i]).mean()

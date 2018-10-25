@@ -117,6 +117,7 @@ def run_experiment(model, optimizer, loss_fun, metric, training_loader, training
         path, ext = os.path.splitext(weights_path)
         weights_path = path + '_best' + ext
     min_loss = float('inf')
+    last_best = 0
     for epoch in range(max_epochs+1):
         # scheduler.step()
         train(model, training_loader, optimizer, loss_fun, keep_state=False, clip=10, cuda=cuda)
@@ -124,7 +125,7 @@ def run_experiment(model, optimizer, loss_fun, metric, training_loader, training
             train_loss, train_corr = evaluate(model, training_loader, loss_fun, metric, keep_state=False,
                                               writer=training_writer, epoch=epoch, cuda=cuda)
             logger.info(f"===========epoch: {epoch}=============")
-            logger.info(f'training loss value: {train_loss}')
+            logger.info(f'training loss: {train_loss}')
             logger.info(f'training corr: {train_corr}')
         if type(train_corr) == dict:
             max_acc = dict(zip(list(train_corr.keys()), [-float('inf')] * len(train_corr)))
@@ -137,14 +138,20 @@ def run_experiment(model, optimizer, loss_fun, metric, training_loader, training
             if epoch % eval_train_every != 0:
                 logger.info(f"===========epoch: {epoch}=============")
 
-            logger.info(f'valid loss value: {valid_loss}')
+            logger.info(f'valid loss: {valid_loss}')
             logger.info(f'valid corr: {valid_corr}')
 
             if valid_loss < min_loss:
-                logger.info(f'found new valid loss value: {valid_loss}')
+                logger.info(f'found new valid loss: {valid_loss}')
                 # save model parameters
                 torch.save(model.state_dict(), weights_path)
                 min_loss = valid_loss
+                last_best = epoch
+
+            if epoch - last_best > 200:
+                logger.info("valid loss have not decreased for 200 epochs!")
+                logger.info("stop training to avoid overfitting!")
+                return max_acc, min_loss
 
             if type(valid_corr) == dict:
                 for task, corr in valid_corr.items():

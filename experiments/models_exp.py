@@ -1,19 +1,16 @@
-# import torch.multiprocessing as mp
+import torch
 import os
-
-from scipy.io.arff.tests.test_arffread import expected_types
-
+import yaml
+import json
+import click
+import logging
 os.sys.path.insert(0, '..')
 from utils.experiment_util import *
 from tensorboardX import SummaryWriter
 from torch import optim
-import yaml
-import logging
-import json
 import h5py
 from glob import glob
 from sklearn.model_selection import KFold
-import click
 import pandas as pd
 from braindecode.models.util import to_dense_prediction_model
 from braindecode.torch_ext.modules import Expression
@@ -21,11 +18,11 @@ from braindecode.models.deep4 import Deep4Net
 from braindecode.models.shallow_fbcsp import ShallowFBCSPNet as Shallow
 from torch.nn.functional import mse_loss
 from utils.config import cfg, merge_configs
-import yaml
+
 
 MAX_EPOCHS = 1000
-EVAL_TRAIN_EVERY = 50
-EVAL_VALID_EVERY = 50
+EVAL_TRAIN_EVERY = 20
+EVAL_VALID_EVERY = 5
 CUDA = True
 EXPERIMENT_NAME = 'models'
 np.random.seed(cfg.TRAINING.RANDOM_SEED)
@@ -64,7 +61,7 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
     if not os.path.isdir(log_dir):
         os.makedirs(log_dir)
 
-    logging.basicConfig(level=logging.DEBUG, filename=os.path.join(log_dir, 'log.o'), filemode='w+',
+    logging.basicConfig(level=logging.DEBUG, filename=os.path.join(log_dir, 'log.txt'), filemode='w+',
                         format='%(levelname)s %(filename)s:%(lineno)4d: %(message)s')
     logger.info('Called with configs:')
     logger.info(json.dumps(cfg, indent=2))
@@ -175,8 +172,12 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
             model = HybridModel(in_channels=in_channels, output_stride=int(cfg.HYBRID.OUTPUT_STRIDE))
 
             optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
-            loss_fun = WeightedMSE(weights_tensor)
-            metric = CorrCoeff(weights).weighted_corrcoef
+            if cfg.HYBRID.OUTPUT_STRIDE > 1:
+                loss_fun = mse_loss
+                metric = CorrCoeff().corrcoeff
+            else:
+                loss_fun = WeightedMSE(weights_tensor)
+                metric = CorrCoeff(weights).weighted_corrcoef
 
         elif model_type == 'deep4':
             model = Deep4Net(in_chans=in_channels, n_classes=num_classes, input_time_length=crop_len,
