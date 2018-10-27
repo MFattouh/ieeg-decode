@@ -125,10 +125,11 @@ def run_experiment(model, optimizer, loss_fun, metric, training_loader, training
             logger.info(f"===========epoch: {epoch}=============")
             logger.info(f'training loss: {train_loss}')
             logger.info(f'training corr: {train_corr}')
-        if type(train_corr) == dict:
-            max_acc = dict(zip(list(train_corr.keys()), [-float('inf')] * len(train_corr)))
-        else:
-            max_acc = -float('inf')
+        if epoch == 0:
+            if type(train_corr) == dict:
+                max_acc = dict(zip(list(train_corr.keys()), [-float('inf')] * len(train_corr)))
+            else:
+                max_acc = -float('inf')
         if epoch % eval_valid_every == 0:
             valid_loss, valid_corr = evaluate(model, valid_loader, loss_fun, metric, keep_state=False,
                                               writer=valid_writer, epoch=epoch, cuda=cuda)
@@ -146,11 +147,6 @@ def run_experiment(model, optimizer, loss_fun, metric, training_loader, training
                 min_loss = valid_loss
                 last_best = epoch
 
-            if epoch - last_best > 200:
-                logger.info("valid loss have not decreased for 200 epochs!")
-                logger.info("stop training to avoid overfitting!")
-                return max_acc, min_loss
-
             if type(valid_corr) == dict:
                 for task, corr in valid_corr.items():
                     if corr > max_acc[task]:
@@ -160,6 +156,11 @@ def run_experiment(model, optimizer, loss_fun, metric, training_loader, training
                 max_acc = valid_corr
 
         # if training stalls
+        if epoch - last_best > 200:
+            logger.info("valid loss have not decreased for 200 epochs!")
+            logger.info("stop training to avoid overfitting!")
+            break
+
         if type(valid_corr) == dict:
             if np.any(np.isnan(list(train_corr.values()))) or np.any(np.isnan(list(valid_corr.values()))):
                 logger.error('Training stalled')
