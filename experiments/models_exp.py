@@ -10,7 +10,7 @@ from tensorboardX import SummaryWriter
 from torch import optim
 import h5py
 from glob import glob
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, LeaveOneOut
 import pandas as pd
 from braindecode.models.util import to_dense_prediction_model
 from braindecode.torch_ext.modules import Expression
@@ -248,7 +248,12 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
 
         if exp_type == 'cv':
             crop_idx = np.arange(len(trials)).squeeze().tolist()
-            kfold = KFold(n_splits=n_splits, shuffle=False, random_state=cfg.TRAINING.RANDOM_SEED)
+            if n_splits > 0:
+                kfold = KFold(n_splits=n_splits, shuffle=False, random_state=cfg.TRAINING.RANDOM_SEED)
+            elif n_splits == -1:
+                kfold = LeaveOneOut()
+            else:
+                raise ValueError(f'Invalid number of folds: {n_splits}')
 
             for fold_idx, (train_split, valid_split) in enumerate(kfold.split(crop_idx), 1):
                 training_loader, valid_loader = create_loaders(trials, train_split, valid_split, batch_size, dummy_idx)
@@ -260,10 +265,8 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
                 logger.info('Validation trials:')
                 logger.info(valid_split)
 
-                # scheduler = StepLR(optimizer, step_size=100, gamma=0.9)
                 training_writer = SummaryWriter(os.path.join(log_dir, rec_name, 'fold' + str(fold_idx), 'train'))
                 valid_writer = SummaryWriter(os.path.join(log_dir, rec_name, 'fold' + str(fold_idx), 'valid'))
-                # training_writer.add_text('Model parameters', str(HybridModel.get_meta(model)))
                 training_writer.add_text('Description', model_type.upper())
                 training_writer.add_text('Learning Rate', str(learning_rate))
                 training_writer.add_text('Weight Decay', str(wd_const))
