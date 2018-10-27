@@ -50,6 +50,9 @@ __C.TRAINING.CROP_LEN = 16 * 250            # [samples] default to number of sam
 __C.TRAINING.INPUT_STRIDE = 16 * 250 - 681  # [samples]
 __C.TRAINING.BATCH_SIZE = 32
 
+__C.EVAL = dict()
+__C.EVAL.INPUT_STRIDE = 16 * 250 - 681      # [samples]
+
 __C.OPTIMIZATION = dict()
 __C.OPTIMIZATION.OPTIMIZER = 'adam'
 __C.OPTIMIZATION.BASE_LR = 5e-3

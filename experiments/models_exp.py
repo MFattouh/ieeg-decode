@@ -86,22 +86,17 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
     assert len(datasets) > 0, 'no datasets for subject %s found!' % subject
     new_srate_x = cfg.TRAINING.INPUT_SAMPLING_RATE
     new_srate_y = cfg.TRAINING.OUTPUT_SAMPLING_RATE
-    x2y_ratio = new_srate_x / new_srate_y
     batch_size = cfg.TRAINING.BATCH_SIZE
 
     # window size
-    crop_len = cfg.TRAINING.CROP_LEN  # [sec]
-    num_relaxed_samples = 681  # int(relax_window * new_srate_x)
-
-    # stride = crop_len - num_relaxed_samples
-    stride = cfg.TRAINING.INPUT_STRIDE
+    num_relaxed_samples = 681
 
     # define some constants related to model type
     if model_type == 'rnn':
         learning_rate = cfg.OPTIMIZATION.BASE_LR
         wd_const = cfg.OPTIMIZATION.WEIGHT_DECAY
         dummy_idx = 'f'
-        weights = make_weights(crop_len, num_relaxed_samples, type='step')
+        weights = make_weights(cfg.TRAINING.CROP_LEN, num_relaxed_samples, type='step')
         weights_tensor = torch.from_numpy(weights)
         if CUDA:
             weights_tensor = weights_tensor.cuda()
@@ -114,7 +109,7 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
         dummy_idx = 'l'
         learning_rate = 1e-4    # value from robin's script
         num_dropped_samples = 113
-        weights = make_weights(crop_len - num_dropped_samples, num_relaxed_samples - num_dropped_samples, type='step')
+        weights = make_weights(cfg.TRAINING.CROP_LEN - num_dropped_samples, num_relaxed_samples - num_dropped_samples, type='step')
         weights_tensor = torch.from_numpy(weights)
         if CUDA:
             weights_tensor = weights_tensor.cuda()
@@ -123,7 +118,7 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
         wd_const = 5e-6         # value from paper
         dummy_idx = 'f'
         num_dropped_samples = 121
-        weights = make_weights(crop_len - num_dropped_samples, num_relaxed_samples - num_dropped_samples, type='step')
+        weights = make_weights(cfg.TRAINING.CROP_LEN - num_dropped_samples, num_relaxed_samples - num_dropped_samples, type='step')
         weights_tensor = torch.from_numpy(weights)
         if CUDA:
             weights_tensor = weights_tensor.cuda()
@@ -161,12 +156,12 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
         else:
             dataset_name = 'F'
         if task == 'multi':
-            crops, in_channels = read_multi_datasets(dataset_path, dataset_name, crop_len, stride, x2y_ratio, dummy_idx)
+            trials, in_channels = read_multi_datasets(dataset_path, dataset_name)
             num_classes = len(dataset_path)
         else:
-            crops, in_channels = read_dataset(dataset_path, dataset_name, crop_len, stride, x2y_ratio, dummy_idx)
+            trials, in_channels = read_dataset(dataset_path, dataset_name)
             num_classes = 1
-        logger.info(f'{len(crops)} trials found!')
+        logger.info(f'{len(trials)} trials found!')
         # create the model
         if model_type == 'rnn':
             model = HybridModel(in_channels=in_channels, output_stride=int(cfg.HYBRID.OUTPUT_STRIDE))
@@ -180,7 +175,7 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
                 metric = CorrCoeff(weights).weighted_corrcoef
 
         elif model_type == 'deep4':
-            model = Deep4Net(in_chans=in_channels, n_classes=num_classes, input_time_length=crop_len,
+            model = Deep4Net(in_chans=in_channels, n_classes=num_classes, input_time_length=cfg.TRAINING.CROP_LEN,
                              final_conv_length=2, stride_before_pool=True).create_network()
 
             # remove softmax
@@ -213,7 +208,7 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
             metric = CorrCoeff().corrcoeff
 
         elif model_type == 'shallow':
-            model = Shallow(in_chans=in_channels, n_classes=num_classes, input_time_length=crop_len,
+            model = Shallow(in_chans=in_channels, n_classes=num_classes, input_time_length=cfg.TRAINING.CROP_LEN,
                             final_conv_length=2).create_network()
 
             # remove softmax
@@ -252,11 +247,11 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
             model.cuda()
 
         if exp_type == 'cv':
-            crop_idx = np.arange(len(crops)).squeeze().tolist()
+            crop_idx = np.arange(len(trials)).squeeze().tolist()
             kfold = KFold(n_splits=n_splits, shuffle=False, random_state=cfg.TRAINING.RANDOM_SEED)
 
             for fold_idx, (train_split, valid_split) in enumerate(kfold.split(crop_idx), 1):
-                training_loader, valid_loader = create_loaders(crops, train_split, valid_split, batch_size)
+                training_loader, valid_loader = create_loaders(trials, train_split, valid_split, batch_size, dummy_idx)
                 msg = str(f'FOLD{fold_idx}:')
                 logger.info(msg)
                 logger.info('='*len(msg))
@@ -272,7 +267,7 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
                 training_writer.add_text('Description', model_type.upper())
                 training_writer.add_text('Learning Rate', str(learning_rate))
                 training_writer.add_text('Weight Decay', str(wd_const))
-                training_writer.add_text('Crop Length[sec]', str(crop_len))
+                training_writer.add_text('Crop Length[sec]', str(cfg.TRAINING.CROP_LEN))
                 training_writer.add_text('Input srate[Hz]', str(new_srate_x))
                 training_writer.add_text('Output srate[Hz]', str(new_srate_y))
                 training_writer.add_text('relaxed samples', str(num_relaxed_samples))
@@ -295,11 +290,11 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
                 df.to_csv(os.path.join(log_dir, 'cv_acc.csv'), index=True)
 
         elif exp_type == 'train':
-            num_crops = len(crops)
+            num_crops = len(trials)
             train_split = list(np.arange(0, num_crops - 2))
             valid_split = list(np.arange(num_crops - 2, num_crops))
 
-            training_loader, valid_loader = create_loaders(crops, train_split, valid_split, batch_size)
+            training_loader, valid_loader = create_loaders(trials, train_split, valid_split, batch_size, dummy_idx)
 
             # print(num_classes)
             # print(in_channels)
@@ -315,7 +310,7 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
             training_writer.add_text('Description', model_type.upper())
             training_writer.add_text('Learning Rate', str(learning_rate))
             training_writer.add_text('Weight Decay', str(wd_const))
-            training_writer.add_text('Crop Length', str(crop_len))
+            training_writer.add_text('Crop Length', str(cfg.TRAINING.CROP_LEN))
             training_writer.add_text('Input srate[Hz]', str(new_srate_x))
             training_writer.add_text('Output srate[Hz]', str(new_srate_y))
             training_writer.add_text('relaxed samples', str(num_relaxed_samples))
@@ -325,7 +320,7 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
             valid_writer.add_text('Description', model_type.upper())
             valid_writer.add_text('Learning Rate', str(learning_rate))
             valid_writer.add_text('Weight Decay', str(wd_const))
-            valid_writer.add_text('Crop Length', str(crop_len))
+            valid_writer.add_text('Crop Length', str(cfg.TRAINING.CROP_LEN))
             valid_writer.add_text('Input srate[Hz]', str(new_srate_x))
             valid_writer.add_text('Output srate[Hz]', str(new_srate_y))
             valid_writer.add_text('relaxed samples', str(num_relaxed_samples))
@@ -350,7 +345,7 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
         else:
             weights_path = os.path.join(train_path, rec_name, 'weights.pt')
             assert os.path.exists(weights_path), 'No weights are detected for this recording!'
-            valid_dataset = ConcatDataset(crops)
+            valid_dataset = ConcatDataset(trials)
             valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, drop_last=False, num_workers=2)
 
             corr, mse = run_eval(model, loss_fun, metric, valid_loader, weights_path, cuda=CUDA)

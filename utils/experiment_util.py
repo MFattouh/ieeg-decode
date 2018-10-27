@@ -9,28 +9,24 @@ import os
 logger = logging.getLogger('__name__')
 
 
-def read_dataset(dataset_path, dataset_name, window, stride, x2y_ratio, dummy_idx):
+def read_dataset(dataset_path, dataset_name):
     datasets_list = []
     with h5py.File(dataset_path, 'r') as hf:
         trials = [hf[obj_ref] for obj_ref in hf[dataset_name][0]]
         for idx, trial in enumerate(trials, 1):
-            try:
-                # read data
-                X = trial['ieeg'][:]
-                y = trial['traj'][:][:].squeeze()
-                if X.ndim < 2:
-                    logger.warning('irregular trial shape encountered. Trial%d will be ignored' %idx)
-                    continue
-                in_channels = X.shape[0]
-                if idx == 1:
-                    in_channels = X.shape[0]
-                else:
-                    if in_channels != X.shape[0]:
-                        logger.exception('different channels in different trials %d != %d' % (in_channels, X.shape[0]))
-                datasets_list.append(ECoGDatast(X, y, window, stride, x2y_ratio=x2y_ratio, input_shape='ct', dummy_idx=dummy_idx))
-            except ValueError as e:
-                logger.warning('exception found while creating dataset object from trial %s \n%s' % (idx, e))
+            # read data
+            X = trial['ieeg'][:]
+            y = trial['traj'][:][:].squeeze()
+            if X.ndim < 2:
+                logger.warning('irregular trial shape encountered. Trial%d will be ignored' % idx)
                 continue
+            in_channels = X.shape[0]
+            if idx == 1:
+                in_channels = X.shape[0]
+            else:
+                if in_channels != X.shape[0]:
+                    logger.exception('different channels in different trials %d != %d' % (in_channels, X.shape[0]))
+            datasets_list.append((X, y))
 
     return datasets_list, in_channels
 
@@ -53,7 +49,7 @@ def read_multi_datasets(input_datasets_path, dataset_name, window, stride, x2y_r
                     if in_channels != X.shape[0]:
                         logger.exception('different channels in different trials %d != %d' % (in_channels, X.shape[0]))
 
-                datasets_list.append([X, y])
+                datasets_list.append((X, y))
 
     for dataset_path in input_datasets_path[1:]:
         with h5py.File(dataset_path, 'r') as hf:
@@ -68,23 +64,25 @@ def read_multi_datasets(input_datasets_path, dataset_name, window, stride, x2y_r
                     datasets_list[idx][1] = np.c_[datasets_list[idx][1],
                                                   trial['traj'][:][:].squeeze()]
 
-    pytorch_datasets = []
-    for dataset in datasets_list:
-        try:
-            pytorch_datasets.append(ECoGDatast(dataset[0], dataset[1], window, stride, x2y_ratio=x2y_ratio,
-                                               input_shape='ct', dummy_idx=dummy_idx))
-        except ValueError as e:
-            logger.warning('exception found while creating dataset object from trial %s \n%s' % (idx, e))
-            continue
-
-    return pytorch_datasets, in_channels
+    return datasets_list, in_channels
 
 
-def create_loaders(datasets, train_split, valid_split, batch_size):
-    training_dataset = ConcatDataset([datasets[idx] for idx in train_split])
-    training_loader = DataLoader(training_dataset, batch_size=batch_size, shuffle=True, drop_last=False, num_workers=2)
-    valid_dataset= ConcatDataset([datasets[idx] for idx in valid_split])
-    valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, drop_last=False, num_workers=2)
+def create_loaders(trials, train_split, valid_split, batch_size, dummy_idx):
+    training_trials = [trials[idx] for idx in train_split]
+    training_dataset = ConcatDataset(
+        [ECoGDatast(X, y, window=cfg.TRAINING.CROP_LEN, stride=cfg.TRAINING.INPUT_STRIDE,
+                    x2y_ratio=cfg.TRAINING.INPUT_SAMPLING_RATE / cfg.TRAINING.OUTPUT_SAMPLING_RATE,
+                    input_shape='ct', dummy_idx=dummy_idx)
+         for X, y in training_trials])
+    training_loader = DataLoader(training_dataset, batch_size=batch_size, shuffle=True, drop_last=False, num_workers=4)
+
+    valid_trials = [trials[idx] for idx in valid_split]
+    valid_dataset = ConcatDataset(
+        [ECoGDatast(X, y, window=cfg.TRAINING.CROP_LEN, stride=cfg.EVAL.INPUT_STRIDE,
+                    x2y_ratio=cfg.TRAINING.INPUT_SAMPLING_RATE / cfg.TRAINING.OUTPUT_SAMPLING_RATE,
+                    input_shape='ct', dummy_idx=dummy_idx)
+         for X, y in valid_trials])
+    valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, drop_last=False, num_workers=4)
 
     return training_loader, valid_loader
 
