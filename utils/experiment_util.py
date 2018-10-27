@@ -13,7 +13,7 @@ def read_dataset(dataset_path, dataset_name):
     datasets_list = []
     with h5py.File(dataset_path, 'r') as hf:
         trials = [hf[obj_ref] for obj_ref in hf[dataset_name][0]]
-        for idx, trial in enumerate(trials, 1):
+        for idx, trial in enumerate(trials[:-1], 1):
             # read data
             X = trial['ieeg'][:]
             y = trial['traj'][:][:].squeeze()
