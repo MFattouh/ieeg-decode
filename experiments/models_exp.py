@@ -247,15 +247,101 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
             model.cuda()
 
         if exp_type == 'cv':
-            crop_idx = np.arange(len(trials)).squeeze().tolist()
+            crop_idx = list(range((len(trials))))
             if n_splits > 0:
                 kfold = KFold(n_splits=n_splits, shuffle=False, random_state=cfg.TRAINING.RANDOM_SEED)
             elif n_splits == -1:
                 kfold = LeaveOneOut()
             else:
-                raise ValueError(f'Invalid number of folds: {n_splits}')
+                raise ValueError(f'Invalid number of splits: {n_splits}')
 
             for fold_idx, (train_split, valid_split) in enumerate(kfold.split(crop_idx), 1):
+
+                if fold_idx > 1:
+                    # re-create the models for each new fold
+                    if model_type == 'rnn':
+                        model = HybridModel(in_channels=in_channels, output_stride=int(cfg.HYBRID.OUTPUT_STRIDE))
+
+                        optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
+                        if cfg.HYBRID.OUTPUT_STRIDE > 1:
+                            loss_fun = mse_loss
+                            metric = CorrCoeff().corrcoeff
+                        else:
+                            loss_fun = WeightedMSE(weights_tensor)
+                            metric = CorrCoeff(weights).weighted_corrcoef
+
+                    elif model_type == 'deep4':
+                        model = Deep4Net(in_chans=in_channels, n_classes=num_classes, input_time_length=cfg.TRAINING.CROP_LEN,
+                                         final_conv_length=2, stride_before_pool=True).create_network()
+
+                        # remove softmax
+                        new_model = nn.Sequential()
+                        for name, module in model.named_children():
+                            if name == 'softmax':
+                                # continue
+                                break
+                            new_model.add_module(name, module)
+
+                        # lets remove empty final dimension
+                        def squeeze_out(x):
+                            assert x.size()[1] == num_classes and x.size()[3] == 1
+                            return x.squeeze()
+                            # assert x.size()[1] == 1 and x.size()[3] == 1
+                            # return x[:, 0, :, 0]
+
+                        new_model.add_module('squeeze', Expression(squeeze_out))
+                        if num_classes > 1:
+                            def transpose_class_time(x):
+                                return x.transpose(2, 1)
+                            new_model.add_module('trans', Expression(transpose_class_time))
+
+                        model = new_model
+
+                        to_dense_prediction_model(model)
+
+                        optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
+                        loss_fun = mse_loss
+                        metric = CorrCoeff().corrcoeff
+
+                    elif model_type == 'shallow':
+                        model = Shallow(in_chans=in_channels, n_classes=num_classes, input_time_length=cfg.TRAINING.CROP_LEN,
+                                        final_conv_length=2).create_network()
+
+                        # remove softmax
+                        new_model = nn.Sequential()
+                        for name, module in model.named_children():
+                            if name == 'softmax':
+                                break
+                            new_model.add_module(name, module)
+
+                        # lets remove empty final dimension
+                        def squeeze_out(x):
+                            assert x.size()[1] == num_classes and x.size()[3] == 1
+                            return x.squeeze()
+                            # return x[:, 0, :, 0]
+
+                        new_model.add_module('squeeze', Expression(squeeze_out))
+                        model = new_model
+
+                        to_dense_prediction_model(model)
+
+                        optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
+                        loss_fun = WeightedMSE(weights_tensor)
+                        metric = CorrCoeff(weights).weighted_corrcoef
+                    elif model_type == 'hybrid':
+                        cfg.HYBRID.SPATIAL_CONVS['num_filters'] = [in_channels]
+                        model = HybridModel(in_channels=in_channels, output_stride=int(cfg.HYBRID.OUTPUT_STRIDE))
+
+                        optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
+                        loss_fun = WeightedMSE(weights_tensor)
+                        metric = CorrCoeff(weights).weighted_corrcoef
+
+                    elif model_type == 'tcn':
+                        raise NotImplementedError
+
+                    if CUDA:
+                        model.cuda()
+
                 training_loader, valid_loader = create_loaders(trials, train_split, valid_split, batch_size, dummy_idx)
                 msg = str(f'FOLD{fold_idx}:')
                 logger.info(msg)
