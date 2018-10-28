@@ -434,7 +434,10 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
         else:
             weights_path = os.path.join(train_path, rec_name, 'weights.pt')
             assert os.path.exists(weights_path), 'No weights are detected for this recording!'
-            valid_dataset = ConcatDataset(trials)
+            valid_dataset = ConcatDataset(
+                [ECoGDatast(X, y, window=cfg.TRAINING.CROP_LEN, stride=cfg.TRAINING.INPUT_STRIDE,
+                            x2y_ratio=cfg.TRAINING.INPUT_SAMPLING_RATE / cfg.TRAINING.OUTPUT_SAMPLING_RATE,
+                            input_shape='ct', dummy_idx=dummy_idx) for (X, y) in trials])
             valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, drop_last=False, num_workers=2)
 
             corr, mse = run_eval(model, loss_fun, metric, valid_loader, weights_path, cuda=CUDA)

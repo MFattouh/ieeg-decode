@@ -13,7 +13,9 @@ def read_dataset(dataset_path, dataset_name):
     datasets_list = []
     with h5py.File(dataset_path, 'r') as hf:
         trials = [hf[obj_ref] for obj_ref in hf[dataset_name][0]]
-        for idx, trial in enumerate(trials[:-1], 1):
+        if len(trials) > 1:
+            trials = trials[:-1]
+        for idx, trial in enumerate(trials, 1):
             # read data
             X = trial['ieeg'][:]
             y = trial['traj'][:][:].squeeze()
@@ -31,7 +33,7 @@ def read_dataset(dataset_path, dataset_name):
     return datasets_list, in_channels
 
 
-def read_multi_datasets(input_datasets_path, dataset_name, window, stride, x2y_ratio, dummy_idx):
+def read_multi_datasets(input_datasets_path, dataset_name):
     datasets_list = []
     with h5py.File(input_datasets_path[0], 'r') as hf:
         trials = [hf[obj_ref] for obj_ref in hf[dataset_name][0]]
@@ -125,11 +127,13 @@ def run_experiment(model, optimizer, loss_fun, metric, training_loader, training
             logger.info(f"===========epoch: {epoch}=============")
             logger.info(f'training loss: {train_loss}')
             logger.info(f'training corr: {train_corr}')
+
         if epoch == 0:
             if type(train_corr) == dict:
                 max_acc = dict(zip(list(train_corr.keys()), [-float('inf')] * len(train_corr)))
             else:
                 max_acc = -float('inf')
+
         if epoch % eval_valid_every == 0:
             valid_loss, valid_corr = evaluate(model, valid_loader, loss_fun, metric, keep_state=False,
                                               writer=valid_writer, epoch=epoch, cuda=cuda)
