@@ -174,8 +174,8 @@ def run_experiment(model, optimizer, loss_fun, metric, training_loader, training
                 logger.error('Training stalled')
                 break
 
-    # report last acc
-    logger.info(f'final valid loss: {valid_loss}')
-    logger.info(f'final valid corr: {valid_corr}')
+    # report best values
+    logger.info(f'Best valid loss: {min_loss}')
+    logger.info(f'Best valid corr: {max_acc}')
 
     return max_acc, min_loss
