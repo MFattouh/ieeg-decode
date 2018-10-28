@@ -294,16 +294,16 @@ class HybridModel(nn.Module):
         # convolution layers over time dimension only
         if cfg.HYBRID.TEMPORAL_CONVS.ENABLED:
             temporal_conv_config = dict(zip(map(lambda k: k.lower(), cfg.HYBRID.TEMPORAL_CONVS.keys()), cfg.HYBRID.TEMPORAL_CONVS.values()))
-            temporal_conv_config.pop('ENABLED')
+            temporal_conv_config.pop('enabled')
             self.time_conv = make_temporal_convs(**temporal_conv_config)
-            rnn_input_size *= cfg.HYBRID.TEMPORAL_CONVS.num_filters[-1]
+            rnn_input_size *= cfg.HYBRID.TEMPORAL_CONVS.NUM_FILTERS[-1]
         else:
             self.time_conv = None
 
         if cfg.HYBRID.L2POOLING.ENABLED:
             l2pooling_config = dict(zip(map(lambda k: k.lower(), cfg.HYBRID.L2POOLING.keys()), cfg.HYBRID.L2POOLING.values()))
-            l2pooling_config.pop('ENABLED')
-            self.l2pooling = self.make_l2pooling(**l2pooling_config)
+            l2pooling_config.pop('enabled')
+            self.l2pooling = make_l2pooling(**l2pooling_config)
         else:
             self.l2pooling = None
 
