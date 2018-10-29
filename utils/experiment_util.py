@@ -4,7 +4,9 @@ from utils.pytorch_util import *
 import h5py
 import logging
 import os
+import datetime
 from utils.config import cfg
+
 
 logger = logging.getLogger('__name__')
 
@@ -237,28 +239,43 @@ def run_experiment(model, optimizer, loss_fun, metric, training_loader, training
     min_loss = float('inf')
     last_best = 0
     for epoch in range(max_epochs+1):
-        # scheduler.step()
-        train(model, training_loader, optimizer, loss_fun, keep_state=False, clip=10, cuda=cuda)
-        if epoch % eval_train_every == 0:
+        if epoch % eval_train_every == 0 or epoch % eval_valid_every == 0:
+            logger.info(f"===========epoch: {epoch}=============")
+            logger.info(f"Started at: {datetime.datetime.now():%d %b: %H:M}")
+
+        # report init. error before training
+        if epoch == 0:
             train_loss, train_corr = evaluate(model, training_loader, loss_fun, metric, keep_state=False,
                                               writer=training_writer, epoch=epoch, cuda=cuda)
-            logger.info(f"===========epoch: {epoch}=============")
-            logger.info(f'training loss: {train_loss}')
-            logger.info(f'training corr: {train_corr}')
+            logger.info(f'init. training loss value: {train_loss}')
+            logger.info(f'init. training corr: {train_corr}')
 
-        if epoch == 0:
+            valid_loss, valid_corr = evaluate(model, valid_loader, loss_fun, metric, keep_state=False,
+                                              writer=valid_writer, epoch=epoch, cuda=cuda)
+            logger.info(f'init. valid loss: {valid_loss}')
+            logger.info(f'init. valid corr: {valid_corr}')
+
             if type(train_corr) == dict:
                 max_acc = dict(zip(list(train_corr.keys()), [-float('inf')] * len(train_corr)))
             else:
                 max_acc = -float('inf')
 
+            continue
+
+        if scheduler is not None:
+            scheduler.step(epoch-1)
+
+        train(model, training_loader, optimizer, loss_fun, keep_state=False, clip=10, cuda=cuda)
+
+        if epoch % eval_train_every == 0:
+            train_loss, train_corr = evaluate(model, training_loader, loss_fun, metric, keep_state=False,
+                                              writer=training_writer, epoch=epoch, cuda=cuda)
+            logger.info(f'training loss: {train_loss}')
+            logger.info(f'training corr: {train_corr}')
+
         if epoch % eval_valid_every == 0:
             valid_loss, valid_corr = evaluate(model, valid_loader, loss_fun, metric, keep_state=False,
                                               writer=valid_writer, epoch=epoch, cuda=cuda)
-
-            if epoch % eval_train_every != 0:
-                logger.info(f"===========epoch: {epoch}=============")
-
             logger.info(f'valid loss: {valid_loss}')
             logger.info(f'valid corr: {valid_corr}')
 
