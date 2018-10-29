@@ -1,10 +1,10 @@
 from torch.utils.data import DataLoader, ConcatDataset
 import torch.multiprocessing
 from utils.pytorch_util import *
-from models.hybrid import *
 import h5py
 import logging
 import os
+from utils.config import cfg
 
 logger = logging.getLogger('__name__')
 
@@ -38,33 +38,33 @@ def read_multi_datasets(input_datasets_path, dataset_name):
     with h5py.File(input_datasets_path[0], 'r') as hf:
         trials = [hf[obj_ref] for obj_ref in hf[dataset_name][0]]
         for idx, trial in enumerate(trials, 1):
-                # read data
-                X = trial['ieeg'][:]
-                y = trial['traj'][:][:].squeeze()
-                if X.ndim < 2:
-                    logger.warning('irregular trial shape encountered. Trial%d will be ignored' %idx)
-                    continue
+            # read data
+            X = trial['ieeg'][:]
+            y = trial['traj'][:][:].squeeze()
+            if X.ndim < 2:
+                logger.warning('irregular trial shape encountered. Trial%d will be ignored' %idx)
+                continue
+            in_channels = X.shape[0]
+            if idx == 1:
                 in_channels = X.shape[0]
-                if idx == 1:
-                    in_channels = X.shape[0]
-                else:
-                    if in_channels != X.shape[0]:
-                        logger.exception('different channels in different trials %d != %d' % (in_channels, X.shape[0]))
+            else:
+                if in_channels != X.shape[0]:
+                    logger.exception('different channels in different trials %d != %d' % (in_channels, X.shape[0]))
 
-                datasets_list.append((X, y))
+            datasets_list.append((X, y))
 
     for dataset_path in input_datasets_path[1:]:
         with h5py.File(dataset_path, 'r') as hf:
             trials = [hf[obj_ref] for obj_ref in hf['D'][0]]
             for idx, trial in enumerate(trials):
-                    # read data
-                    X = trial['ieeg'][:]
-                    if X.ndim < 2:
-                        logger.warning('irregular trial shape encountered. Trial%d will be ignored' % (idx+1))
-                        continue
-                    np.testing.assert_equal(X, datasets_list[idx][0], 'iEEG channels did not match')
-                    datasets_list[idx][1] = np.c_[datasets_list[idx][1],
-                                                  trial['traj'][:][:].squeeze()]
+                # read data
+                X = trial['ieeg'][:]
+                if X.ndim < 2:
+                    logger.warning('irregular trial shape encountered. Trial%d will be ignored' % (idx+1))
+                    continue
+                np.testing.assert_equal(X, datasets_list[idx][0], 'iEEG channels did not match')
+                datasets_list[idx][1] = np.c_[datasets_list[idx][1],
+                                              trial['traj'][:][:].squeeze()]
 
     return datasets_list, in_channels
 
@@ -101,6 +101,124 @@ def make_weights(crop_len, num_relaxed_samples, type='qubic'):
         if num_relaxed_samples > 0:
             weights[:num_relaxed_samples] = 0
         return weights
+
+
+def evaluate(model, data_loader, loss_fun, metric, keep_state=False, writer=None, epoch=0, cuda=False):
+    model.eval()
+    # loop over the dataset
+    avg_loss = 0
+    targets = []
+    preds = []
+    with torch.no_grad():
+        for itr, (data, target_cpu) in enumerate(data_loader):
+            data, target = Variable(data), Variable(target_cpu)
+            if cuda:
+                data, target = data.cuda(), target.cuda()
+
+            if keep_state:
+                if itr == 0:
+                    hidden = None
+                else:
+                    if model.rnn_type == 'lstm':
+                        for h in hidden:
+                            h.detach_()
+                    else:
+                        hidden.detach_()
+                output, hidden = model(data, hidden)  # NxTxnum_classes
+            else:
+                output = model(data)
+
+            output_size = list(output.size())
+            seq_len = output_size[1] if len(output_size) > 1 else output_size[0]
+            batch_size = output_size[0] if len(output_size) > 1 else 1
+            num_classes = output_size[2] if len(output_size) > 2 else 1
+            avg_loss += loss_fun(output.squeeze(), target[:, -seq_len:].squeeze()).detach().cpu().numpy().squeeze()
+            # compute the correlation coff. for each seq. in batch
+            target = target_cpu[:, -seq_len:].numpy().squeeze()
+            output = output.detach().cpu().numpy().squeeze()
+            if seq_len > 1:
+                if itr == 0:
+                    cum_corr = np.zeros((num_classes, 1))
+                    valid_corr = np.zeros((num_classes, 1))
+                if num_classes == 1:
+                    corr = np.arctanh(metric(target, output))
+                    if not np.isnan(corr):
+                        cum_corr[0] += corr
+                        valid_corr[0] += 1
+                else:
+                    for class_idx in range(num_classes):
+                        # compute correlation, apply fisher's transform
+                        corr = np.arctanh(metric(target[:, :, class_idx], output[:, :, class_idx]))
+                        if not np.isnan(corr):
+                            cum_corr[class_idx] += corr
+                            valid_corr[class_idx] += 1
+
+            # one sample per-sequence -> store results and compute corr. at once
+            else:
+                targets.append(target)
+                preds.append(output)
+
+    # divide by the number of mini-batches
+    avg_loss /= len(data_loader)
+    if seq_len == 1:
+        targets = np.concatenate(targets, axis=0).squeeze()
+        preds = np.concatenate(preds, axis=0).squeeze()
+        num_classes = targets.shape[-1] if len(targets.shape) > 1 else 1
+        if num_classes > 1:
+            avg_corr = dict()
+            for class_idx in range(num_classes):
+                # compute correlation, apply fisher's transform
+                avg_corr[f"Class{class_idx}"] = metric(targets[:, class_idx], preds[:, class_idx])
+        else:
+            avg_corr = metric(targets, preds)
+    else:
+        # average the correlations across over iterations apply inverse fisher's transform find mean over batch
+        if num_classes == 1:
+            avg_corr = np.tanh(cum_corr.squeeze() / valid_corr.squeeze()).mean()
+        else:
+            avg_corr = dict()
+            for i in range(num_classes):
+                avg_corr['Class%d' % i] = np.tanh(cum_corr[i] / valid_corr[i]).mean()
+
+    if writer is not None:
+        writer.add_scalar('loss', avg_loss, epoch)
+        if num_classes == 1:
+            writer.add_scalar('corr', avg_corr, epoch)
+        else:
+            writer.add_scalars('corr', avg_corr, epoch)
+    return avg_loss, avg_corr
+
+
+def train(model, data_loader, optimizer, loss_fun, keep_state=False, clip=0, cuda=False):
+    model.train()
+    for itr, (data, target_cpu) in enumerate(data_loader):
+        # data, target = Variable(data.transpose(1, 0)), Variable(target_cpu.squeeze(0))
+        data, target = Variable(data), Variable(target_cpu)
+        if cuda:
+            data, target = data.cuda(), target.cuda()
+
+        optimizer.zero_grad()
+        # detach to stop back-propagation to older state
+        if keep_state:
+            if model.rnn_type == 'lstm':
+                for h in hidden:
+                    h.detach_()
+            else:
+                hidden.detach_()
+
+            output, hidden = model(data, hidden)  # NxTxnum_classes
+
+        else:
+            output = model(data)
+
+        output_size = list(output.size())
+        seq_len = output_size[1] if len(output_size) > 1 else output_size[0]
+        loss = loss_fun(output.squeeze(), target[:, -seq_len:].squeeze())
+        loss.backward()
+        if clip > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
+
+        optimizer.step()
 
 
 def run_eval(model, loss_fun, metric, valid_loader, weights_path, cuda):

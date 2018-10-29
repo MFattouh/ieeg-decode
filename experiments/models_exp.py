@@ -5,6 +5,7 @@ import json
 import click
 import logging
 os.sys.path.insert(0, '..')
+import torch.nn as nn
 from utils.experiment_util import *
 from tensorboardX import SummaryWriter
 from torch import optim
@@ -18,6 +19,7 @@ from braindecode.models.deep4 import Deep4Net
 from braindecode.models.shallow_fbcsp import ShallowFBCSPNet as Shallow
 from torch.nn.functional import mse_loss
 from utils.config import cfg, merge_configs
+from models.hybrid import HybridModel
 
 
 MAX_EPOCHS = 1000
