@@ -6,6 +6,15 @@ import logging
 import os
 import datetime
 from utils.config import cfg
+from braindecode.models.util import to_dense_prediction_model
+from braindecode.torch_ext.modules import Expression
+from braindecode.models.deep4 import Deep4Net
+from braindecode.models.shallow_fbcsp import ShallowFBCSPNet as Shallow
+from torch.nn.functional import mse_loss
+from models.hybrid import HybridModel
+from torch import optim
+from torch.optim.lr_scheduler import CosineAnnealingLR
+import torch.nn as nn
 
 
 logger = logging.getLogger('__name__')
@@ -71,38 +80,142 @@ def read_multi_datasets(input_datasets_path, dataset_name):
     return datasets_list, in_channels
 
 
-def create_loaders(trials, train_split, valid_split, batch_size, dummy_idx):
-    training_trials = [trials[idx] for idx in train_split]
-    training_dataset = ConcatDataset(
+def concatenate_trials(trials):
+    return ConcatDataset(
         [ECoGDatast(X, y, window=cfg.TRAINING.CROP_LEN, stride=cfg.TRAINING.INPUT_STRIDE,
                     x2y_ratio=cfg.TRAINING.INPUT_SAMPLING_RATE / cfg.TRAINING.OUTPUT_SAMPLING_RATE,
-                    input_shape='ct', dummy_idx=dummy_idx)
-         for X, y in training_trials])
-    training_loader = DataLoader(training_dataset, batch_size=batch_size, shuffle=True, drop_last=False, num_workers=4)
+                    input_shape='ct', dummy_idx=cfg.TRAINING.DUMMY_IDX) for (X, y) in trials])
 
-    valid_trials = [trials[idx] for idx in valid_split]
-    valid_dataset = ConcatDataset(
-        [ECoGDatast(X, y, window=cfg.TRAINING.CROP_LEN, stride=cfg.EVAL.INPUT_STRIDE,
-                    x2y_ratio=cfg.TRAINING.INPUT_SAMPLING_RATE / cfg.TRAINING.OUTPUT_SAMPLING_RATE,
-                    input_shape='ct', dummy_idx=dummy_idx)
-         for X, y in valid_trials])
-    valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, drop_last=False, num_workers=4)
+
+def create_loaders(trials, train_split, valid_split=None):
+    training_trials = [trials[idx] for idx in train_split]
+    training_dataset = concatenate_trials(training_trials)
+    training_loader = DataLoader(training_dataset, batch_size=cfg.TRAINING.BATCH_SIZE, shuffle=True, drop_last=False,
+                                 pin_memory=True, num_workers=4)
+
+    if valid_split is not None:
+        valid_trials = [trials[idx] for idx in valid_split]
+        valid_dataset = concatenate_trials(valid_trials)
+        valid_loader = DataLoader(valid_dataset, batch_size=cfg.TRAINING.BATCH_SIZE, shuffle=True, drop_last=False,
+                                  pin_memory=True, num_workers=4)
+    else:
+        valid_loader = None
 
     return training_loader, valid_loader
 
 
-def make_weights(crop_len, num_relaxed_samples, type='qubic'):
-    if type == 'qubic':
+def make_weights(crop_len, num_relaxed_samples, dtype='qubic'):
+    if dtype == 'qubic':
         weights = np.ones((crop_len, 1), dtype=np.float32).squeeze()
         if num_relaxed_samples > 0:
             x = np.arange(num_relaxed_samples, dtype=np.float32)
             weights[:num_relaxed_samples] = x ** 3 / (num_relaxed_samples ** 3)
         return weights
-    if type == 'step':
+    if dtype == 'step':
         weights = np.ones((crop_len, 1), dtype=np.float32).squeeze()
         if num_relaxed_samples > 0:
             weights[:num_relaxed_samples] = 0
         return weights
+
+
+def create_model(model_type, in_channels, num_classes, cuda=True):
+    num_relaxed_samples = 681
+    if model_type == 'rnn':
+        model = HybridModel(in_channels=in_channels, output_stride=int(cfg.HYBRID.OUTPUT_STRIDE))
+
+        if cfg.HYBRID.OUTPUT_STRIDE > 1:
+            loss_fun = mse_loss
+            metric = CorrCoeff().corrcoeff
+        else:
+            weights = make_weights(cfg.TRAINING.CROP_LEN, num_relaxed_samples, dtype='step')
+            weights_tensor = torch.from_numpy(weights)
+            if cuda:
+                weights_tensor = weights_tensor.cuda()
+            loss_fun = WeightedMSE(weights_tensor)
+            metric = CorrCoeff(weights).weighted_corrcoef
+
+    elif model_type == 'deep4':
+        model = Deep4Net(in_chans=in_channels, n_classes=num_classes, input_time_length=cfg.TRAINING.CROP_LEN,
+                         final_conv_length=2, stride_before_pool=True).create_network()
+
+        # remove softmax
+        new_model = nn.Sequential()
+        for name, module in model.named_children():
+            if name == 'softmax':
+                # continue
+                break
+            new_model.add_module(name, module)
+
+        # lets remove empty final dimension
+        def squeeze_out(x):
+            assert x.size()[1] == num_classes and x.size()[3] == 1
+            return x.squeeze()
+            # assert x.size()[1] == 1 and x.size()[3] == 1
+            # return x[:, 0, :, 0]
+
+        new_model.add_module('squeeze', Expression(squeeze_out))
+        if num_classes > 1:
+            def transpose_class_time(x):
+                return x.transpose(2, 1)
+
+            new_model.add_module('trans', Expression(transpose_class_time))
+
+        model = new_model
+
+        to_dense_prediction_model(model)
+
+        loss_fun = mse_loss
+        metric = CorrCoeff().corrcoeff
+
+    elif model_type == 'shallow':
+        model = Shallow(in_chans=in_channels, n_classes=num_classes, input_time_length=cfg.TRAINING.CROP_LEN,
+                        final_conv_length=2).create_network()
+
+        # remove softmax
+        new_model = nn.Sequential()
+        for name, module in model.named_children():
+            if name == 'softmax':
+                break
+            new_model.add_module(name, module)
+
+        # lets remove empty final dimension
+        def squeeze_out(x):
+            assert x.size()[1] == num_classes and x.size()[3] == 1
+            return x.squeeze()
+            # return x[:, 0, :, 0]
+
+        new_model.add_module('squeeze', Expression(squeeze_out))
+        model = new_model
+
+        to_dense_prediction_model(model)
+
+        num_dropped_samples = 113
+        weights = make_weights(cfg.TRAINING.CROP_LEN - num_dropped_samples, num_relaxed_samples - num_dropped_samples,
+                               dtype='step')
+        weights_tensor = torch.from_numpy(weights)
+        if cuda:
+            weights_tensor = weights_tensor.cuda()
+        loss_fun = WeightedMSE(weights_tensor)
+        metric = CorrCoeff(weights).weighted_corrcoef
+    elif model_type == 'hybrid':
+        cfg.HYBRID.SPATIAL_CONVS['num_filters'] = [in_channels]
+        model = HybridModel(in_channels=in_channels, output_stride=int(cfg.HYBRID.OUTPUT_STRIDE))
+        num_dropped_samples = 121
+        weights = make_weights(cfg.TRAINING.CROP_LEN - num_dropped_samples, num_relaxed_samples - num_dropped_samples,
+                               dtype='step')
+        weights_tensor = torch.from_numpy(weights)
+        if cuda:
+            weights_tensor = weights_tensor.cuda()
+        loss_fun = WeightedMSE(weights_tensor)
+        metric = CorrCoeff(weights).weighted_corrcoef
+
+    elif model_type == 'tcn':
+        raise NotImplementedError
+    optimizer = optim.Adam(model.parameters(), lr=cfg.OPTIMIZATION.BASE_LR, weight_decay=cfg.OPTIMIZATION.WEIGHT_DECAY)
+    scheduler = CosineAnnealingLR(optimizer, T_max=cfg.TRAINING.MAX_EPOCHS)
+    if cuda:
+        model.cuda()
+    return model, optimizer, scheduler, loss_fun, metric
 
 
 def evaluate(model, data_loader, loss_fun, metric, keep_state=False, writer=None, epoch=0, cuda=False):
@@ -230,18 +343,92 @@ def run_eval(model, loss_fun, metric, valid_loader, weights_path, cuda):
     return valid_corr, valid_loss
 
 
-def run_experiment(model, optimizer, loss_fun, metric, training_loader, training_writer, valid_loader, valid_writer,
-                   weights_path, max_epochs, eval_train_every, eval_valid_every, cuda):
+def run_training(model, optimizer, scheduler, loss_fun, metric, training_loader, training_writer, weights_path, cuda):
     if os.path.exists(weights_path):
         model.load_state_dict(torch.load(weights_path))
         path, ext = os.path.splitext(weights_path)
         weights_path = path + '_best' + ext
     min_loss = float('inf')
     last_best = 0
-    for epoch in range(max_epochs+1):
-        if epoch % eval_train_every == 0 or epoch % eval_valid_every == 0:
+    for epoch in range(cfg.TRAINING.MAX_EPOCHS+1):
+        if epoch % cfg.TRAINING.EVAL_TRAIN_EVERY == 0 or epoch % cfg.TRAINING.EVAL_VALID_EVERY == 0:
             logger.info(f"===========epoch: {epoch}=============")
-            logger.info(f"Started at: {datetime.datetime.now():%d %b: %H:M}")
+            logger.info(f"Started at: {datetime.datetime.now():%d %b: %H:%M}")
+
+        # report init. error before training
+        if epoch == 0:
+            train_loss, train_corr = evaluate(model, training_loader, loss_fun, metric, keep_state=False,
+                                              writer=training_writer, epoch=epoch, cuda=cuda)
+            logger.info(f'init. training loss value: {train_loss}')
+            logger.info(f'init. training corr: {train_corr}')
+
+            if type(train_corr) == dict:
+                max_acc = dict(zip(list(train_corr.keys()), [-float('inf')] * len(train_corr)))
+            else:
+                max_acc = -float('inf')
+
+            continue
+
+        if scheduler is not None:
+            scheduler.step(epoch-1)
+
+        train(model, training_loader, optimizer, loss_fun, keep_state=False, clip=0, cuda=cuda)
+
+        if epoch % cfg.TRAINING.EVAL_TRAIN_EVERY == 0:
+            train_loss, train_corr = evaluate(model, training_loader, loss_fun, metric, keep_state=False,
+                                              writer=training_writer, epoch=epoch, cuda=cuda)
+            logger.info(f'training loss: {train_loss}')
+            logger.info(f'training corr: {train_corr}')
+
+            if train_loss < min_loss:
+                logger.info(f'found new valid loss: {train_loss}')
+                min_loss = train_loss
+                last_best = epoch
+
+            if type(train_corr) == dict:
+                for task, corr in train_corr.items():
+                    if corr > max_acc[task]:
+                        max_acc[task] = corr
+
+            elif train_corr > max_acc:
+                max_acc = train_corr
+
+        # if training stalls
+        if epoch - last_best > 200:
+            logger.info("valid loss have not decreased for 200 epochs!")
+            logger.info("stop training to avoid overfitting!")
+            break
+
+        if type(train_corr) == dict:
+            if np.any(np.isnan(list(train_corr.values()))) or np.any(np.isnan(list(train_corr.values()))):
+                logger.error('Training stalled')
+                break
+        else:
+            if np.isnan(train_corr) or np.isnan(train_corr):
+                logger.error('Training stalled')
+                break
+
+    # report best values
+    logger.info(f'Best valid loss: {min_loss}')
+    logger.info(f'Best valid corr: {max_acc}')
+
+    # save model parameters
+    torch.save(model.state_dict(), weights_path)
+    return max_acc, min_loss
+
+
+def run_cv_experiment(model, optimizer, scheduler, loss_fun, metric, training_loader, training_writer, valid_loader,
+                      valid_writer, weights_path, cuda):
+    if os.path.exists(weights_path):
+        model.load_state_dict(torch.load(weights_path))
+        path, ext = os.path.splitext(weights_path)
+        weights_path = path + '_best' + ext
+    min_loss = float('inf')
+    last_best = 0
+    for epoch in range(cfg.TRAINING.MAX_EPOCHS+1):
+        if epoch % cfg.TRAINING.EVAL_TRAIN_EVERY == 0 or epoch % cfg.TRAINING.EVAL_VALID_EVERY == 0:
+            logger.info(f"===========epoch: {epoch}=============")
+            logger.info(f"Started at: {datetime.datetime.now():%d %b: %H:%M}")
 
         # report init. error before training
         if epoch == 0:
@@ -265,15 +452,15 @@ def run_experiment(model, optimizer, loss_fun, metric, training_loader, training
         if scheduler is not None:
             scheduler.step(epoch-1)
 
-        train(model, training_loader, optimizer, loss_fun, keep_state=False, clip=10, cuda=cuda)
+        train(model, training_loader, optimizer, loss_fun, keep_state=False, clip=0, cuda=cuda)
 
-        if epoch % eval_train_every == 0:
+        if epoch % cfg.TRAINING.EVAL_TRAIN_EVERY == 0:
             train_loss, train_corr = evaluate(model, training_loader, loss_fun, metric, keep_state=False,
                                               writer=training_writer, epoch=epoch, cuda=cuda)
             logger.info(f'training loss: {train_loss}')
             logger.info(f'training corr: {train_corr}')
 
-        if epoch % eval_valid_every == 0:
+        if epoch % cfg.TRAINING.EVAL_VALID_EVERY == 0:
             valid_loss, valid_corr = evaluate(model, valid_loader, loss_fun, metric, keep_state=False,
                                               writer=valid_writer, epoch=epoch, cuda=cuda)
             logger.info(f'valid loss: {valid_loss}')

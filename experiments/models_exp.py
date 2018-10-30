@@ -5,31 +5,19 @@ import json
 import click
 import logging
 os.sys.path.insert(0, '..')
-import torch.nn as nn
 from utils.experiment_util import *
 from tensorboardX import SummaryWriter
-from torch import optim
 import h5py
 from glob import glob
 from sklearn.model_selection import KFold, LeaveOneOut
 import pandas as pd
-from braindecode.models.util import to_dense_prediction_model
-from braindecode.torch_ext.modules import Expression
-from braindecode.models.deep4 import Deep4Net
-from braindecode.models.shallow_fbcsp import ShallowFBCSPNet as Shallow
-from torch.nn.functional import mse_loss
 from utils.config import cfg, merge_configs
-from models.hybrid import HybridModel
 
-
-MAX_EPOCHS = 1000
-EVAL_TRAIN_EVERY = 20
-EVAL_VALID_EVERY = 5
 CUDA = True
 EXPERIMENT_NAME = 'models'
 np.random.seed(cfg.TRAINING.RANDOM_SEED)
 torch.manual_seed(cfg.TRAINING.RANDOM_SEED)
-TASK_NAMES = ['POS', 'VEL']
+TASK_NAMES = ['XPOS', 'XVEL', 'ABSPOS', 'ABSVEL']
 
 logger = logging.getLogger(__name__)
 
@@ -86,48 +74,6 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
     else:
         raise KeyError
     assert len(datasets) > 0, 'no datasets for subject %s found!' % subject
-    new_srate_x = cfg.TRAINING.INPUT_SAMPLING_RATE
-    new_srate_y = cfg.TRAINING.OUTPUT_SAMPLING_RATE
-    batch_size = cfg.TRAINING.BATCH_SIZE
-
-    # window size
-    num_relaxed_samples = 681
-
-    # define some constants related to model type
-    if model_type == 'rnn':
-        learning_rate = cfg.OPTIMIZATION.BASE_LR
-        wd_const = cfg.OPTIMIZATION.WEIGHT_DECAY
-        dummy_idx = 'f'
-        weights = make_weights(cfg.TRAINING.CROP_LEN, num_relaxed_samples, type='step')
-        weights_tensor = torch.from_numpy(weights)
-        if CUDA:
-            weights_tensor = weights_tensor.cuda()
-    elif model_type == 'deep4':
-        learning_rate = 1e-4    # value from robin's script
-        wd_const = 0
-        dummy_idx = 'l'
-    elif model_type == 'shallow':
-        wd_const = 0
-        dummy_idx = 'l'
-        learning_rate = 1e-4    # value from robin's script
-        num_dropped_samples = 113
-        weights = make_weights(cfg.TRAINING.CROP_LEN - num_dropped_samples, num_relaxed_samples - num_dropped_samples, type='step')
-        weights_tensor = torch.from_numpy(weights)
-        if CUDA:
-            weights_tensor = weights_tensor.cuda()
-    elif model_type == 'hybrid':
-        learning_rate = 5e-3    # value from paper
-        wd_const = 5e-6         # value from paper
-        dummy_idx = 'f'
-        num_dropped_samples = 121
-        weights = make_weights(cfg.TRAINING.CROP_LEN - num_dropped_samples, num_relaxed_samples - num_dropped_samples, type='step')
-        weights_tensor = torch.from_numpy(weights)
-        if CUDA:
-            weights_tensor = weights_tensor.cuda()
-
-    else:
-        raise NotImplementedError
-
     rec_names = []
     if task == 'multi':
         for dataset_path in [dataset[0] for dataset in datasets]:
@@ -152,7 +98,7 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
     df = pd.DataFrame(index=index, columns=columns)
     for dataset_path, rec_name in zip(datasets, rec_names):
         msg = str('Working on dataset %s:' % rec_name if task == 'multi' else dataset_path)
-        logger.info(msg + '\n' + '=' * len(msg) + '\n' + '=' * len(msg))
+        logger.info(msg + '\n' + '=' * len(msg))
         if exp_type == 'cv' or exp_type == 'train':
             dataset_name = 'D'
         else:
@@ -163,90 +109,8 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
         else:
             trials, in_channels = read_dataset(dataset_path, dataset_name)
             num_classes = 1
-        logger.info(f'{len(trials)} trials found!')
-        # create the model
-        if model_type == 'rnn':
-            model = HybridModel(in_channels=in_channels, output_stride=int(cfg.HYBRID.OUTPUT_STRIDE))
-
-            optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
-            if cfg.HYBRID.OUTPUT_STRIDE > 1:
-                loss_fun = mse_loss
-                metric = CorrCoeff().corrcoeff
-            else:
-                loss_fun = WeightedMSE(weights_tensor)
-                metric = CorrCoeff(weights).weighted_corrcoef
-
-        elif model_type == 'deep4':
-            model = Deep4Net(in_chans=in_channels, n_classes=num_classes, input_time_length=cfg.TRAINING.CROP_LEN,
-                             final_conv_length=2, stride_before_pool=True).create_network()
-
-            # remove softmax
-            new_model = nn.Sequential()
-            for name, module in model.named_children():
-                if name == 'softmax':
-                    # continue
-                    break
-                new_model.add_module(name, module)
-
-            # lets remove empty final dimension
-            def squeeze_out(x):
-                assert x.size()[1] == num_classes and x.size()[3] == 1
-                return x.squeeze()
-                # assert x.size()[1] == 1 and x.size()[3] == 1
-                # return x[:, 0, :, 0]
-
-            new_model.add_module('squeeze', Expression(squeeze_out))
-            if num_classes > 1:
-                def transpose_class_time(x):
-                    return x.transpose(2, 1)
-                new_model.add_module('trans', Expression(transpose_class_time))
-
-            model = new_model
-
-            to_dense_prediction_model(model)
-
-            optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
-            loss_fun = mse_loss
-            metric = CorrCoeff().corrcoeff
-
-        elif model_type == 'shallow':
-            model = Shallow(in_chans=in_channels, n_classes=num_classes, input_time_length=cfg.TRAINING.CROP_LEN,
-                            final_conv_length=2).create_network()
-
-            # remove softmax
-            new_model = nn.Sequential()
-            for name, module in model.named_children():
-                if name == 'softmax':
-                    break
-                new_model.add_module(name, module)
-
-            # lets remove empty final dimension
-            def squeeze_out(x):
-                assert x.size()[1] == num_classes and x.size()[3] == 1
-                return x.squeeze()
-                # return x[:, 0, :, 0]
-
-            new_model.add_module('squeeze', Expression(squeeze_out))
-            model = new_model
-
-            to_dense_prediction_model(model)
-
-            optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
-            loss_fun = WeightedMSE(weights_tensor)
-            metric = CorrCoeff(weights).weighted_corrcoef
-        elif model_type == 'hybrid':
-            cfg.HYBRID.SPATIAL_CONVS['num_filters'] = [in_channels]
-            model = HybridModel(in_channels=in_channels, output_stride=int(cfg.HYBRID.OUTPUT_STRIDE))
-
-            optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
-            loss_fun = WeightedMSE(weights_tensor)
-            metric = CorrCoeff(weights).weighted_corrcoef
-
-        elif model_type == 'tcn':
-            raise NotImplementedError
-
-        if CUDA:
-            model.cuda()
+        logger.info(f'{len(trials)} trials found')
+        logger.info(f'Number of input input channels: {in_channels}')
 
         if exp_type == 'cv':
             crop_idx = list(range((len(trials))))
@@ -259,92 +123,9 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
 
             for fold_idx, (train_split, valid_split) in enumerate(kfold.split(crop_idx), 1):
 
-                if fold_idx > 1:
-                    # re-create the models for each new fold
-                    if model_type == 'rnn':
-                        model = HybridModel(in_channels=in_channels, output_stride=int(cfg.HYBRID.OUTPUT_STRIDE))
+                model, optimizer, scheduler, loss_fun, metric = create_model(model_type, in_channels, num_classes, CUDA)
 
-                        optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
-                        if cfg.HYBRID.OUTPUT_STRIDE > 1:
-                            loss_fun = mse_loss
-                            metric = CorrCoeff().corrcoeff
-                        else:
-                            loss_fun = WeightedMSE(weights_tensor)
-                            metric = CorrCoeff(weights).weighted_corrcoef
-
-                    elif model_type == 'deep4':
-                        model = Deep4Net(in_chans=in_channels, n_classes=num_classes, input_time_length=cfg.TRAINING.CROP_LEN,
-                                         final_conv_length=2, stride_before_pool=True).create_network()
-
-                        # remove softmax
-                        new_model = nn.Sequential()
-                        for name, module in model.named_children():
-                            if name == 'softmax':
-                                # continue
-                                break
-                            new_model.add_module(name, module)
-
-                        # lets remove empty final dimension
-                        def squeeze_out(x):
-                            assert x.size()[1] == num_classes and x.size()[3] == 1
-                            return x.squeeze()
-                            # assert x.size()[1] == 1 and x.size()[3] == 1
-                            # return x[:, 0, :, 0]
-
-                        new_model.add_module('squeeze', Expression(squeeze_out))
-                        if num_classes > 1:
-                            def transpose_class_time(x):
-                                return x.transpose(2, 1)
-                            new_model.add_module('trans', Expression(transpose_class_time))
-
-                        model = new_model
-
-                        to_dense_prediction_model(model)
-
-                        optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
-                        loss_fun = mse_loss
-                        metric = CorrCoeff().corrcoeff
-
-                    elif model_type == 'shallow':
-                        model = Shallow(in_chans=in_channels, n_classes=num_classes, input_time_length=cfg.TRAINING.CROP_LEN,
-                                        final_conv_length=2).create_network()
-
-                        # remove softmax
-                        new_model = nn.Sequential()
-                        for name, module in model.named_children():
-                            if name == 'softmax':
-                                break
-                            new_model.add_module(name, module)
-
-                        # lets remove empty final dimension
-                        def squeeze_out(x):
-                            assert x.size()[1] == num_classes and x.size()[3] == 1
-                            return x.squeeze()
-                            # return x[:, 0, :, 0]
-
-                        new_model.add_module('squeeze', Expression(squeeze_out))
-                        model = new_model
-
-                        to_dense_prediction_model(model)
-
-                        optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
-                        loss_fun = WeightedMSE(weights_tensor)
-                        metric = CorrCoeff(weights).weighted_corrcoef
-                    elif model_type == 'hybrid':
-                        cfg.HYBRID.SPATIAL_CONVS['num_filters'] = [in_channels]
-                        model = HybridModel(in_channels=in_channels, output_stride=int(cfg.HYBRID.OUTPUT_STRIDE))
-
-                        optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd_const)
-                        loss_fun = WeightedMSE(weights_tensor)
-                        metric = CorrCoeff(weights).weighted_corrcoef
-
-                    elif model_type == 'tcn':
-                        raise NotImplementedError
-
-                    if CUDA:
-                        model.cuda()
-
-                training_loader, valid_loader = create_loaders(trials, train_split, valid_split, batch_size, dummy_idx)
+                training_loader, valid_loader = create_loaders(trials, train_split, valid_split)
                 msg = str(f'FOLD{fold_idx}:')
                 logger.info(msg)
                 logger.info('='*len(msg))
@@ -355,21 +136,10 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
 
                 training_writer = SummaryWriter(os.path.join(log_dir, rec_name, 'fold' + str(fold_idx), 'train'))
                 valid_writer = SummaryWriter(os.path.join(log_dir, rec_name, 'fold' + str(fold_idx), 'valid'))
-                training_writer.add_text('Description', model_type.upper())
-                training_writer.add_text('Learning Rate', str(learning_rate))
-                training_writer.add_text('Weight Decay', str(wd_const))
-                training_writer.add_text('Crop Length[sec]', str(cfg.TRAINING.CROP_LEN))
-                training_writer.add_text('Input srate[Hz]', str(new_srate_x))
-                training_writer.add_text('Output srate[Hz]', str(new_srate_y))
-                training_writer.add_text('relaxed samples', str(num_relaxed_samples))
-                training_writer.add_text('Input channels', str(in_channels))
-
                 weights_path = os.path.join(log_dir, rec_name, 'fold' + str(fold_idx), 'weights.pt')
 
-                corr, mse = run_experiment(model, optimizer, loss_fun, metric, training_loader, training_writer,
-                                           valid_loader, valid_writer, weights_path, max_epochs=MAX_EPOCHS,
-                                           eval_train_every=EVAL_TRAIN_EVERY, eval_valid_every=EVAL_VALID_EVERY,
-                                           cuda=CUDA)
+                corr, mse = run_cv_experiment(model, optimizer, scheduler, loss_fun, metric, training_loader,
+                                              training_writer, valid_loader, valid_writer, weights_path, cuda=CUDA)
                 if task == 'multi':
                     for task_idx in range(len(corr)):
                         df.loc[(rec_name, 'fold' + str(fold_idx)), TASK_NAMES[task_idx]] = \
@@ -381,46 +151,14 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
                 df.to_csv(os.path.join(log_dir, 'cv_acc.csv'), index=True)
 
         elif exp_type == 'train':
-            num_crops = len(trials)
-            train_split = list(np.arange(0, num_crops - 2))
-            valid_split = list(np.arange(num_crops - 2, num_crops))
+            model, optimizer, scheduler, loss_fun, metric = create_model(model_type, in_channels, num_classes, CUDA)
 
-            training_loader, valid_loader = create_loaders(trials, train_split, valid_split, batch_size, dummy_idx)
-
-            # print(num_classes)
-            # print(in_channels)
-            # print(len(crops))
-            # print(len(training_loader))
-            # print(len(valid_loader))
-
+            training_loader, _ = create_loaders(trials, list(range(len(trials))))
             weights_path = os.path.join(log_dir, rec_name, 'weights.pt')
 
-            # scheduler = StepLR(optimizer, step_size=100, gamma=0.9)
             training_writer = SummaryWriter(os.path.join(log_dir, rec_name, 'train'))
-            # training_writer.add_text('Model parameters', str(HybridModel.get_meta(model)))
-            training_writer.add_text('Description', model_type.upper())
-            training_writer.add_text('Learning Rate', str(learning_rate))
-            training_writer.add_text('Weight Decay', str(wd_const))
-            training_writer.add_text('Crop Length', str(cfg.TRAINING.CROP_LEN))
-            training_writer.add_text('Input srate[Hz]', str(new_srate_x))
-            training_writer.add_text('Output srate[Hz]', str(new_srate_y))
-            training_writer.add_text('relaxed samples', str(num_relaxed_samples))
-            training_writer.add_text('Input channels', str(in_channels))
-
-            valid_writer = SummaryWriter(os.path.join(log_dir, rec_name, 'valid'))
-            valid_writer.add_text('Description', model_type.upper())
-            valid_writer.add_text('Learning Rate', str(learning_rate))
-            valid_writer.add_text('Weight Decay', str(wd_const))
-            valid_writer.add_text('Crop Length', str(cfg.TRAINING.CROP_LEN))
-            valid_writer.add_text('Input srate[Hz]', str(new_srate_x))
-            valid_writer.add_text('Output srate[Hz]', str(new_srate_y))
-            valid_writer.add_text('relaxed samples', str(num_relaxed_samples))
-            valid_writer.add_text('Input channels', str(in_channels))
-
-            corr, mse = run_experiment(model, optimizer, loss_fun, metric, training_loader, training_writer,
-                                       valid_loader, valid_writer, weights_path, max_epochs=MAX_EPOCHS,
-                                       eval_train_every=EVAL_TRAIN_EVERY, eval_valid_every=EVAL_VALID_EVERY,
-                                       cuda=CUDA)
+            corr, mse = run_training(model, optimizer, scheduler, loss_fun, metric, training_loader, training_writer,
+                                     weights_path, cuda=CUDA)
 
             if task == 'multi':
                 for task_idx in range(len(corr)):
@@ -434,14 +172,11 @@ def main(exp_type, dataset_dir, subject, model_type, log_dir, n_splits, task, co
 
         # eval
         else:
+            model, optimizer, scheduler, loss_fun, metric = create_model(model_type, in_channels, num_classes, CUDA)
+
             weights_path = os.path.join(train_path, rec_name, 'weights.pt')
             assert os.path.exists(weights_path), 'No weights are detected for this recording!'
-            valid_dataset = ConcatDataset(
-                [ECoGDatast(X, y, window=cfg.TRAINING.CROP_LEN, stride=cfg.TRAINING.INPUT_STRIDE,
-                            x2y_ratio=cfg.TRAINING.INPUT_SAMPLING_RATE / cfg.TRAINING.OUTPUT_SAMPLING_RATE,
-                            input_shape='ct', dummy_idx=dummy_idx) for (X, y) in trials])
-            valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, drop_last=False, num_workers=2)
-
+            valid_loader, _ = create_loaders(trials, list(range(len(trials))))
             corr, mse = run_eval(model, loss_fun, metric, valid_loader, weights_path, cuda=CUDA)
 
             if task == 'multi':

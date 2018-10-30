@@ -1,0 +1,19 @@
+TRAINING:
+  MAX_EPOCHS: 500
+  EVAL_TRAIN_EVERY: 1
+  EVAL_VALID_EVERY: 1
+  INPUT_SAMPLING_RATE: 250      # [Hz]
+  OUTPUT_SAMPLING_RATE: 250     # [Hz]
+  BATCH_SIZE: 32
+  DUMMY_IDX: 'l'
+#  CROP_LEN: 16 * 250            # [samples] default to number of samples in 16 [sec]
+#  INPUT_STRIDE: 16 * 250 - 681  # [samples]
+#
+#EVAL:
+#  INPUT_STRIDE: 16 * 250 - 681      # [samples]
+
+OPTIMIZATION:
+  OPTIMIZER: 'adam'
+  SCHEDULER: 'cos'
+  BASE_LR: 1e-4
+  WEIGHT_DECAY: 0
