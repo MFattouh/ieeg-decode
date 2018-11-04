@@ -27,7 +27,7 @@ __C.HYBRID.RNN.WEIGHTS_DROPOUT = []  # ['weight_ih_l0', 'weight_ih_l1', 'weight_
 __C.HYBRID.RNN.MAX_LENGTH = 0        # maximum sequence length (required for BNLSTM)
 __C.HYBRID.RNN.HIDDEN_SIZE = 64
 __C.HYBRID.RNN.NUM_LAYERS = 3
-
+# Stride
 __C.HYBRID.OUTPUT_STRIDE = 1
 
 # L2POOLING
@@ -38,11 +38,12 @@ __C.HYBRID.L2POOLING.STRIDE = 0
 
 __C.HYBRID.LINEAR = dict()
 __C.HYBRID.LINEAR.BATCH_NORM = False
-__C.HYBRID.LINEAR.DROPOUT = []  # [0.5, 0.3]
-__C.HYBRID.LINEAR.FC_SIZE = []  # [32, 10]
+__C.HYBRID.LINEAR.DROPOUT = []              # [0.5, 0.3]
+__C.HYBRID.LINEAR.FC_SIZE = []              # [32, 10]
 __C.HYBRID.LINEAR.ACTIVATIONS = 'tanh'
 
 __C.TRAINING = dict()
+__C.TRAINING.MODEL = ''
 __C.TRAINING.RANDOM_SEED = 10418
 __C.TRAINING.MAX_EPOCHS = 1000
 __C.TRAINING.EVAL_TRAIN_EVERY = 20
@@ -53,9 +54,11 @@ __C.TRAINING.CROP_LEN = 16 * 250            # [samples] default to number of sam
 __C.TRAINING.INPUT_STRIDE = 16 * 250 - 681  # [samples]
 __C.TRAINING.BATCH_SIZE = 32
 __C.TRAINING.DUMMY_IDX = ''
+__C.TRAINING.OUTPUT_SEQ_LEN = 0
 
 __C.EVAL = dict()
 __C.EVAL.INPUT_STRIDE = 16 * 250 - 681      # [samples]
+__C.EVAL.SAVE_PREDICTIONS = False
 
 __C.OPTIMIZATION = dict()
 __C.OPTIMIZATION.OPTIMIZER = 'adam'
@@ -69,6 +72,7 @@ def _merg_a_into_b(a, b):
     assert isinstance(b, (edict, dict))
 
     for k, v in a.items():
+        assert k in b, f'Unknown configuration key "{k}"!'
         try:
             if isinstance(v, (edict, dict)):
                 _merg_a_into_b(a[k], b[k])
@@ -82,8 +86,7 @@ def _decode_value(value):
     """
     Decodes values from yaml parser.
 
-    It tries to convert the value from str to list, tuple, ints and floats,
-    in that order.
+    It tries to convert the value from str to list, tuple, ints and floats, in that order.
 
     **Nested lists and tuples will be merged into a single container**
     :param value: value to decode

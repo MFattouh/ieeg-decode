@@ -80,28 +80,26 @@ def read_multi_datasets(input_datasets_path, dataset_name):
     return datasets_list, in_channels
 
 
-def concatenate_trials(trials):
-    return ConcatDataset(
+def create_eval_loader(trials):
+    valid_dataset = ConcatDataset(
+        [ECoGDatast(X, y, window=cfg.TRAINING.CROP_LEN, stride=cfg.EVAL.INPUT_STRIDE,
+                    x2y_ratio=cfg.TRAINING.INPUT_SAMPLING_RATE / cfg.TRAINING.OUTPUT_SAMPLING_RATE,
+                    input_shape='ct', dummy_idx=cfg.TRAINING.DUMMY_IDX) for (X, y) in trials])
+
+    valid_loader = DataLoader(valid_dataset, batch_size=cfg.TRAINING.BATCH_SIZE, shuffle=False, drop_last=False,
+                              pin_memory=True, num_workers=4)
+    return valid_loader
+
+
+def create_training_loader(trials):
+    training_dataset = ConcatDataset(
         [ECoGDatast(X, y, window=cfg.TRAINING.CROP_LEN, stride=cfg.TRAINING.INPUT_STRIDE,
                     x2y_ratio=cfg.TRAINING.INPUT_SAMPLING_RATE / cfg.TRAINING.OUTPUT_SAMPLING_RATE,
                     input_shape='ct', dummy_idx=cfg.TRAINING.DUMMY_IDX) for (X, y) in trials])
 
-
-def create_loaders(trials, train_split, valid_split=None):
-    training_trials = [trials[idx] for idx in train_split]
-    training_dataset = concatenate_trials(training_trials)
     training_loader = DataLoader(training_dataset, batch_size=cfg.TRAINING.BATCH_SIZE, shuffle=True, drop_last=False,
                                  pin_memory=True, num_workers=4)
-
-    if valid_split is not None:
-        valid_trials = [trials[idx] for idx in valid_split]
-        valid_dataset = concatenate_trials(valid_trials)
-        valid_loader = DataLoader(valid_dataset, batch_size=cfg.TRAINING.BATCH_SIZE, shuffle=True, drop_last=False,
-                                  pin_memory=True, num_workers=4)
-    else:
-        valid_loader = None
-
-    return training_loader, valid_loader
+    return training_loader
 
 
 def make_weights(crop_len, num_relaxed_samples, dtype='qubic'):
@@ -118,9 +116,9 @@ def make_weights(crop_len, num_relaxed_samples, dtype='qubic'):
         return weights
 
 
-def create_model(model_type, in_channels, num_classes, cuda=True):
+def create_model(in_channels, num_classes, cuda=True):
     num_relaxed_samples = 681
-    if model_type == 'rnn':
+    if cfg.TRAINING.MODEL.lower() == 'rnn':
         model = HybridModel(in_channels=in_channels, output_stride=int(cfg.HYBRID.OUTPUT_STRIDE))
 
         if cfg.HYBRID.OUTPUT_STRIDE > 1:
@@ -134,7 +132,7 @@ def create_model(model_type, in_channels, num_classes, cuda=True):
             loss_fun = WeightedMSE(weights_tensor)
             metric = CorrCoeff(weights).weighted_corrcoef
 
-    elif model_type == 'deep4':
+    elif cfg.TRAINING.MODEL.lower() == 'deep4':
         model = Deep4Net(in_chans=in_channels, n_classes=num_classes, input_time_length=cfg.TRAINING.CROP_LEN,
                          final_conv_length=2, stride_before_pool=True).create_network()
 
@@ -167,7 +165,7 @@ def create_model(model_type, in_channels, num_classes, cuda=True):
         loss_fun = mse_loss
         metric = CorrCoeff().corrcoeff
 
-    elif model_type == 'shallow':
+    elif cfg.TRAINING.MODEL.lower() == 'shallow':
         model = Shallow(in_chans=in_channels, n_classes=num_classes, input_time_length=cfg.TRAINING.CROP_LEN,
                         final_conv_length=2).create_network()
 
@@ -197,7 +195,7 @@ def create_model(model_type, in_channels, num_classes, cuda=True):
             weights_tensor = weights_tensor.cuda()
         loss_fun = WeightedMSE(weights_tensor)
         metric = CorrCoeff(weights).weighted_corrcoef
-    elif model_type == 'hybrid':
+    elif cfg.TRAINING.MODEL.lower() == 'hybrid':
         cfg.HYBRID.SPATIAL_CONVS['num_filters'] = [in_channels]
         model = HybridModel(in_channels=in_channels, output_stride=int(cfg.HYBRID.OUTPUT_STRIDE))
         num_dropped_samples = 121
@@ -209,12 +207,16 @@ def create_model(model_type, in_channels, num_classes, cuda=True):
         loss_fun = WeightedMSE(weights_tensor)
         metric = CorrCoeff(weights).weighted_corrcoef
 
-    elif model_type == 'tcn':
+    elif cfg.TRAINING.MODEL.lower() == 'tcn':
         raise NotImplementedError
+    else:
+        assert False, f"Unknown Model {cfg.TRAINING.MODEL}"
     optimizer = optim.Adam(model.parameters(), lr=cfg.OPTIMIZATION.BASE_LR, weight_decay=cfg.OPTIMIZATION.WEIGHT_DECAY)
     scheduler = CosineAnnealingLR(optimizer, T_max=cfg.TRAINING.MAX_EPOCHS)
     if cuda:
         model.cuda()
+
+    metric = lambda targets, predictions: np.corrcoef(targets, predictions)[0, 1]
     return model, optimizer, scheduler, loss_fun, metric
 
 
@@ -243,57 +245,39 @@ def evaluate(model, data_loader, loss_fun, metric, keep_state=False, writer=None
             else:
                 output = model(data)
 
+            output = output.squeeze()
             output_size = list(output.size())
             seq_len = output_size[1] if len(output_size) > 1 else output_size[0]
             batch_size = output_size[0] if len(output_size) > 1 else 1
             num_classes = output_size[2] if len(output_size) > 2 else 1
-            avg_loss += loss_fun(output.squeeze(), target[:, -seq_len:].squeeze()).detach().cpu().numpy().squeeze()
+            if batch_size == 1:
+                output = output.unsqueeze(0)
+            # loss value
+            avg_loss += loss_fun(output, target[:, -seq_len:]).cpu().numpy().squeeze()
             # compute the correlation coff. for each seq. in batch
-            target = target_cpu[:, -seq_len:].numpy().squeeze()
-            output = output.detach().cpu().numpy().squeeze()
-            if seq_len > 1:
-                if itr == 0:
-                    cum_corr = np.zeros((num_classes, 1))
-                    valid_corr = np.zeros((num_classes, 1))
-                if num_classes == 1:
-                    corr = np.arctanh(metric(target, output))
-                    if not np.isnan(corr):
-                        cum_corr[0] += corr
-                        valid_corr[0] += 1
-                else:
-                    for class_idx in range(num_classes):
-                        # compute correlation, apply fisher's transform
-                        corr = np.arctanh(metric(target[:, :, class_idx], output[:, :, class_idx]))
-                        if not np.isnan(corr):
-                            cum_corr[class_idx] += corr
-                            valid_corr[class_idx] += 1
+            target = target_cpu[:, -cfg.TRAINING.OUTPUT_SEQ_LEN:].numpy().squeeze()
+            output = output[:, -cfg.TRAINING.OUTPUT_SEQ_LEN:].cpu().numpy().squeeze()
+            if num_classes > 1:
+                target = target.transpose(0, 2)
+                output = output.transpose(0, 2)
 
-            # one sample per-sequence -> store results and compute corr. at once
-            else:
-                targets.append(target)
-                preds.append(output)
+            target = target.reshape(num_classes, -1)
+            output = output.reshape(num_classes, -1)
+
+            preds.append(output)
+            targets.append(target)
 
     # divide by the number of mini-batches
     avg_loss /= len(data_loader)
-    if seq_len == 1:
-        targets = np.concatenate(targets, axis=0).squeeze()
-        preds = np.concatenate(preds, axis=0).squeeze()
-        num_classes = targets.shape[-1] if len(targets.shape) > 1 else 1
-        if num_classes > 1:
-            avg_corr = dict()
-            for class_idx in range(num_classes):
-                # compute correlation, apply fisher's transform
-                avg_corr[f"Class{class_idx}"] = metric(targets[:, class_idx], preds[:, class_idx])
-        else:
-            avg_corr = metric(targets, preds)
+    targets = np.hstack(targets).squeeze()
+    preds = np.hstack(preds).squeeze()
+    num_classes = targets.shape[0] if len(targets.shape) > 1 else 1
+    if num_classes > 1:
+        avg_corr = dict()
+        for class_idx in range(num_classes):
+            avg_corr[f"Class{class_idx}"] = metric(targets[class_idx, ], preds[class_idx, ])
     else:
-        # average the correlations across over iterations apply inverse fisher's transform find mean over batch
-        if num_classes == 1:
-            avg_corr = np.tanh(cum_corr.squeeze() / valid_corr.squeeze()).mean()
-        else:
-            avg_corr = dict()
-            for i in range(num_classes):
-                avg_corr['Class%d' % i] = np.tanh(cum_corr[i] / valid_corr[i]).mean()
+        avg_corr = metric(targets, preds)
 
     if writer is not None:
         writer.add_scalar('loss', avg_loss, epoch)
@@ -301,7 +285,7 @@ def evaluate(model, data_loader, loss_fun, metric, keep_state=False, writer=None
             writer.add_scalar('corr', avg_corr, epoch)
         else:
             writer.add_scalars('corr', avg_corr, epoch)
-    return avg_loss, avg_corr
+    return avg_loss, avg_corr, preds
 
 
 def train(model, data_loader, optimizer, loss_fun, keep_state=False, clip=0, cuda=False):
@@ -336,18 +320,33 @@ def train(model, data_loader, optimizer, loss_fun, keep_state=False, clip=0, cud
         optimizer.step()
 
 
-def run_eval(model, loss_fun, metric, valid_loader, weights_path, cuda):
+def run_eval(model, loss_fun, metric, valid_trials, weights_path, cuda):
+    valid_loader = create_eval_loader(valid_trials)
     assert os.path.exists(weights_path), 'weights_path does not exists'
     model.load_state_dict(torch.load(weights_path))
-    valid_loss, valid_corr = evaluate(model, valid_loader, loss_fun, metric, keep_state=False, cuda=cuda)
+    valid_loss, valid_corr, preds = evaluate(model, valid_loader, loss_fun, metric, keep_state=False, cuda=cuda)
+
+    if cfg.EVAL.SAVE_PREDICTIONS:
+        preds_dir = os.path.join(os.path.dirname(weights_path), 'predictions')
+        if not os.path.exists(preds_dir):
+            os.makedirs(preds_dir)
+        np.savetxt(os.path.join(preds_dir, 'predictions.csv'), preds, delimiter=',')
     return valid_corr, valid_loss
 
 
-def run_training(model, optimizer, scheduler, loss_fun, metric, training_loader, training_writer, weights_path, cuda):
+def run_training(model, optimizer, scheduler, loss_fun, metric, training_trials, training_writer, weights_path, cuda):
+    training_loader = create_training_loader(training_trials)
+    eval_loader = create_eval_loader(training_trials)
+
+    if cfg.EVAL.SAVE_PREDICTIONS:
+        preds_dir = os.path.join(os.path.dirname(weights_path), 'predictions')
+        if not os.path.exists(preds_dir):
+            os.makedirs(preds_dir)
+
     if os.path.exists(weights_path):
+        weights_file_name, ext = os.path.splitext(weights_path)
         model.load_state_dict(torch.load(weights_path))
-        path, ext = os.path.splitext(weights_path)
-        weights_path = path + '_best' + ext
+        weights_path = weights_file_name + '_best' + ext
     min_loss = float('inf')
     last_best = 0
     for epoch in range(cfg.TRAINING.MAX_EPOCHS+1):
@@ -357,8 +356,11 @@ def run_training(model, optimizer, scheduler, loss_fun, metric, training_loader,
 
         # report init. error before training
         if epoch == 0:
-            train_loss, train_corr = evaluate(model, training_loader, loss_fun, metric, keep_state=False,
-                                              writer=training_writer, epoch=epoch, cuda=cuda)
+            train_loss, train_corr, preds = evaluate(model, eval_loader, loss_fun, metric, keep_state=False,
+                                                     writer=training_writer, epoch=epoch, cuda=cuda)
+            if cfg.EVAL.SAVE_PREDICTIONS:
+                np.savetxt(os.path.join(preds_dir, f'{epoch}.csv'), preds, delimiter=',')
+
             logger.info(f'init. training loss value: {train_loss}')
             logger.info(f'init. training corr: {train_corr}')
 
@@ -375,8 +377,11 @@ def run_training(model, optimizer, scheduler, loss_fun, metric, training_loader,
         train(model, training_loader, optimizer, loss_fun, keep_state=False, clip=0, cuda=cuda)
 
         if epoch % cfg.TRAINING.EVAL_TRAIN_EVERY == 0:
-            train_loss, train_corr = evaluate(model, training_loader, loss_fun, metric, keep_state=False,
-                                              writer=training_writer, epoch=epoch, cuda=cuda)
+            train_loss, train_corr, preds = evaluate(model, eval_loader, loss_fun, metric, keep_state=False,
+                                                     writer=training_writer, epoch=epoch, cuda=cuda)
+            if cfg.EVAL.SAVE_PREDICTIONS:
+                np.savetxt(os.path.join(preds_dir, f'{epoch}.csv'), preds, delimiter=',')
+
             logger.info(f'training loss: {train_loss}')
             logger.info(f'training corr: {train_corr}')
 
@@ -394,11 +399,6 @@ def run_training(model, optimizer, scheduler, loss_fun, metric, training_loader,
                 max_acc = train_corr
 
         # if training stalls
-        if epoch - last_best > 200:
-            logger.info("valid loss have not decreased for 200 epochs!")
-            logger.info("stop training to avoid overfitting!")
-            break
-
         if type(train_corr) == dict:
             if np.any(np.isnan(list(train_corr.values()))) or np.any(np.isnan(list(train_corr.values()))):
                 logger.error('Training stalled')
@@ -417,14 +417,22 @@ def run_training(model, optimizer, scheduler, loss_fun, metric, training_loader,
     return max_acc, min_loss
 
 
-def run_cv_experiment(model, optimizer, scheduler, loss_fun, metric, training_loader, training_writer, valid_loader,
+def run_cv_experiment(model, optimizer, scheduler, loss_fun, metric, training_trials, training_writer, valid_trials,
                       valid_writer, weights_path, cuda):
+    training_loader = create_training_loader(training_trials)
+    training_eval_loader = create_training_loader(training_trials)
+    valid_loader = create_eval_loader(valid_trials)
+
+    if cfg.EVAL.SAVE_PREDICTIONS:
+        preds_dir = os.path.join(os.path.dirname(weights_path), 'predictions')
+        if not os.path.exists(preds_dir):
+            os.makedirs(preds_dir)
+
     if os.path.exists(weights_path):
         model.load_state_dict(torch.load(weights_path))
         path, ext = os.path.splitext(weights_path)
         weights_path = path + '_best' + ext
     min_loss = float('inf')
-    last_best = 0
     for epoch in range(cfg.TRAINING.MAX_EPOCHS+1):
         if epoch % cfg.TRAINING.EVAL_TRAIN_EVERY == 0 or epoch % cfg.TRAINING.EVAL_VALID_EVERY == 0:
             logger.info(f"===========epoch: {epoch}=============")
@@ -432,13 +440,15 @@ def run_cv_experiment(model, optimizer, scheduler, loss_fun, metric, training_lo
 
         # report init. error before training
         if epoch == 0:
-            train_loss, train_corr = evaluate(model, training_loader, loss_fun, metric, keep_state=False,
+            train_loss, train_corr, _ = evaluate(model, training_eval_loader, loss_fun, metric, keep_state=False,
                                               writer=training_writer, epoch=epoch, cuda=cuda)
             logger.info(f'init. training loss value: {train_loss}')
             logger.info(f'init. training corr: {train_corr}')
 
-            valid_loss, valid_corr = evaluate(model, valid_loader, loss_fun, metric, keep_state=False,
+            valid_loss, valid_corr, preds = evaluate(model, valid_loader, loss_fun, metric, keep_state=False,
                                               writer=valid_writer, epoch=epoch, cuda=cuda)
+            if cfg.EVAL.SAVE_PREDICTIONS:
+                np.savetxt(os.path.join(preds_dir, f'{epoch}.csv'), preds, delimiter=',')
             logger.info(f'init. valid loss: {valid_loss}')
             logger.info(f'init. valid corr: {valid_corr}')
 
@@ -455,14 +465,17 @@ def run_cv_experiment(model, optimizer, scheduler, loss_fun, metric, training_lo
         train(model, training_loader, optimizer, loss_fun, keep_state=False, clip=0, cuda=cuda)
 
         if epoch % cfg.TRAINING.EVAL_TRAIN_EVERY == 0:
-            train_loss, train_corr = evaluate(model, training_loader, loss_fun, metric, keep_state=False,
+            train_loss, train_corr, _ = evaluate(model, training_eval_loader, loss_fun, metric, keep_state=False,
                                               writer=training_writer, epoch=epoch, cuda=cuda)
             logger.info(f'training loss: {train_loss}')
             logger.info(f'training corr: {train_corr}')
 
         if epoch % cfg.TRAINING.EVAL_VALID_EVERY == 0:
-            valid_loss, valid_corr = evaluate(model, valid_loader, loss_fun, metric, keep_state=False,
+            valid_loss, valid_corr, preds = evaluate(model, valid_loader, loss_fun, metric, keep_state=False,
                                               writer=valid_writer, epoch=epoch, cuda=cuda)
+            if cfg.EVAL.SAVE_PREDICTIONS:
+                np.savetxt(os.path.join(preds_dir, f'{epoch}.csv'), preds, delimiter=',')
+
             logger.info(f'valid loss: {valid_loss}')
             logger.info(f'valid corr: {valid_corr}')
 
@@ -482,11 +495,6 @@ def run_cv_experiment(model, optimizer, scheduler, loss_fun, metric, training_lo
                 max_acc = valid_corr
 
         # if training stalls
-        if epoch - last_best > 200:
-            logger.info("valid loss have not decreased for 200 epochs!")
-            logger.info("stop training to avoid overfitting!")
-            break
-
         if type(valid_corr) == dict:
             if np.any(np.isnan(list(train_corr.values()))) or np.any(np.isnan(list(valid_corr.values()))):
                 logger.error('Training stalled')
