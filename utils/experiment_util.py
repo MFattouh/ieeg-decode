@@ -25,13 +25,13 @@ def read_dataset(dataset_path, dataset_name):
     with h5py.File(dataset_path, 'r') as hf:
         trials = [hf[obj_ref] for obj_ref in hf[dataset_name][0]]
         for idx, trial in enumerate(trials, 1):
-            # ignore trials if there isn't enough input for one training sample
-            if trial['ieeg'].shape[1] < cfg.TRAINING.CROP_LEN:
+            if trial['ieeg'].ndim != 2:
+                logger.warning('irregular trial shape {} encountered in trial {}. '
+                               'Expected 2D array! This trial will be discarded'.format(X.shape, idx))
                 continue
 
             # read data
             X = trial['ieeg'][:]
-            assert X.ndim == 2, 'irregular trial shape encountered in trial %d' % idx
             y = trial['traj'][:][:].squeeze()
 
             # resample if necessary
@@ -51,13 +51,18 @@ def read_dataset(dataset_path, dataset_name):
                     'The desired sampling rate "{}" is larger than the original sampling rate "{}"!'.format(
                         cfg.TRAINING.OUTPUT_SAMPLING_RATE, srate)
 
+            # ignore trials if there isn't enough input for one crop
+            if X.shape[1] < cfg.TRAINING.CROP_LEN:
+                logger.warning('Trial {} is too short. Only {} samples found!'.foramt(X.shape, idx))
+                continue
+
             # TODO: HANDCODED axis
             in_channels = X.shape[0]
             if idx == 1:
                 in_channels = X.shape[0]
             else:
                 assert in_channels == X.shape[0],\
-                    'different channels in different trials %d != %d' % (in_channels, X.shape[0])
+                    'different channels in different trials {} != {}'.format(in_channels, X.shape[0])
 
             datasets_list.append((X, y))
 
@@ -67,14 +72,12 @@ def read_dataset(dataset_path, dataset_name):
 def read_multi_datasets(input_datasets_path, dataset_name):
     datasets_list, in_channels = read_dataset(input_datasets_path[0], dataset_name)
 
+    # TODO: if read_dataset ignores some trials we have no clue which!
     for dataset_path in input_datasets_path[1:]:
         with h5py.File(dataset_path, 'r') as hf:
             trials = [hf[obj_ref] for obj_ref in hf[dataset_name][0]]
             for idx, trial in enumerate(trials):
                 # ignore trials if there isn't enough input for one training sample
-                if trial['ieeg'].shape[1] < cfg.TRAINING.CROP_LEN:
-                    continue
-
                 # read data
                 y = trial['traj'][:][:].squeeze()
                 srate = int(trial['srate'][:][:])
