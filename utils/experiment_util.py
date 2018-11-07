@@ -399,9 +399,9 @@ def training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials
         if not os.path.exists(preds_dir):
             os.makedirs(preds_dir)
 
+    weights_dir, ext = os.path.splitext(weights_path)
     if os.path.exists(weights_path):
         model.load_state_dict(torch.load(weights_path))
-        weights_dir, ext = os.path.splitext(weights_path)
         weights_path = weights_dir + '_best' + ext
 
     min_loss = float('inf')
