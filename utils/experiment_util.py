@@ -79,6 +79,42 @@ def read_multi_datasets(input_datasets_path, dataset_name):
     return datasets_list, in_channels
 
 
+def lr_finder(model, loss_fun, optimizer, training_trials, output_path, min_lr=-6, max_lr=-2, steps=100, cuda=True):
+    lr_values = np.logspace(min_lr, max_lr, steps).tolist()
+    losses = []
+    if cuda:
+        model.cuda()
+    model.train()
+    training_loader = create_training_loader(training_trials)
+    training_iterator = iter(training_loader)
+    with torch.enable_grad():
+        for lr_value in lr_values:
+            optimizer.zero_grad()
+            # init. the optimizer with the lr value
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = lr_value
+
+            try:
+                data, target = next(training_iterator)
+            except StopIteration:
+                training_iterator = iter(training_loader)
+                data, target = next(training_iterator)
+
+            if cuda:
+                data, target = data.cuda(), target.cuda()
+
+            output = model(data)
+            output_size = list(output.size())
+            seq_len = output_size[1] if len(output_size) > 1 else output_size[0]
+            loss = loss_fun(output.squeeze(), target[:, -seq_len:].squeeze())
+            loss.backward()
+            optimizer.step()
+            losses.append(loss.item())
+
+    np_values = np.vstack((lr_values, losses)).T
+    np.savetxt(os.path.join(output_path, 'lr_finder.csv'), np_values, delimiter=',')
+
+
 def create_eval_loader(trials):
     valid_dataset = ConcatDataset(
         [ECoGDatast(X, y, window=cfg.TRAINING.CROP_LEN, stride=cfg.EVAL.INPUT_STRIDE,
@@ -409,10 +445,10 @@ def training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials
                     min_loss = train_loss
                     last_best = epoch
 
-            if type(train_corr) == dict:
-                for task, corr in train_corr.items():
-                    if corr > max_acc[task]:
-                        max_acc[task] = corr
+                if type(train_corr) == dict:
+                    for task, corr in train_corr.items():
+                        if corr > max_acc[task]:
+                            max_acc[task] = corr
 
                 elif train_corr > max_acc:
                     max_acc = train_corr
