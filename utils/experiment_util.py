@@ -15,6 +15,7 @@ from models.hybrid import HybridModel
 from torch import optim
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import torch.nn as nn
+from resampy import resample
 
 logger = logging.getLogger('__name__')
 
@@ -23,58 +24,71 @@ def read_dataset(dataset_path, dataset_name):
     datasets_list = []
     with h5py.File(dataset_path, 'r') as hf:
         trials = [hf[obj_ref] for obj_ref in hf[dataset_name][0]]
-        if len(trials) > 1:
-            trials = trials[:-1]
         for idx, trial in enumerate(trials, 1):
+            # ignore trials if there isn't enough input for one training sample
+            if trial['ieeg'].shape[1] < cfg.TRAINING.CROP_LEN:
+                continue
+
             # read data
             X = trial['ieeg'][:]
+            assert X.ndim == 2, 'irregular trial shape encountered in trial %d' % idx
             y = trial['traj'][:][:].squeeze()
-            if X.ndim < 2:
-                logger.warning('irregular trial shape encountered. Trial%d will be ignored' % idx)
-                continue
+
+            # resample if necessary
+            srate = int(trial['srate'][:][:])
+            # TODO: HANDCODED axis
+            if srate > cfg.TRAINING.INPUT_SAMPLING_RATE:
+                X = resample(X, srate, cfg.TRAINING.INPUT_SAMPLING_RATE, axis=1)
+            else:
+                assert srate == cfg.TRAINING.INPUT_SAMPLING_RATE, \
+                    'The desired sampling rate "{}" is larger than the original sampling rate "{}"!'.format(
+                        cfg.TRAINING.INPUT_SAMPLING_RATE, srate)
+
+            if srate > cfg.TRAINING.OUTPUT_SAMPLING_RATE:
+                y = resample(y, srate, cfg.TRAINING.OUTPUT_SAMPLING_RATE, axis=0)
+            else:
+                assert srate == cfg.TRAINING.OUTPUT_SAMPLING_RATE, \
+                    'The desired sampling rate "{}" is larger than the original sampling rate "{}"!'.format(
+                        cfg.TRAINING.OUTPUT_SAMPLING_RATE, srate)
+
+            # TODO: HANDCODED axis
             in_channels = X.shape[0]
             if idx == 1:
                 in_channels = X.shape[0]
             else:
-                if in_channels != X.shape[0]:
-                    logger.exception('different channels in different trials %d != %d' % (in_channels, X.shape[0]))
+                assert in_channels == X.shape[0],\
+                    'different channels in different trials %d != %d' % (in_channels, X.shape[0])
+
             datasets_list.append((X, y))
 
     return datasets_list, in_channels
 
 
 def read_multi_datasets(input_datasets_path, dataset_name):
-    datasets_list = []
-    with h5py.File(input_datasets_path[0], 'r') as hf:
-        trials = [hf[obj_ref] for obj_ref in hf[dataset_name][0]]
-        for idx, trial in enumerate(trials, 1):
-            # read data
-            X = trial['ieeg'][:]
-            y = trial['traj'][:][:].squeeze()
-            if X.ndim < 2:
-                logger.warning('irregular trial shape encountered. Trial%d will be ignored' %idx)
-                continue
-            in_channels = X.shape[0]
-            if idx == 1:
-                in_channels = X.shape[0]
-            else:
-                if in_channels != X.shape[0]:
-                    logger.exception('different channels in different trials %d != %d' % (in_channels, X.shape[0]))
-
-            datasets_list.append((X, y))
+    datasets_list, in_channels = read_dataset(input_datasets_path[0], dataset_name)
 
     for dataset_path in input_datasets_path[1:]:
         with h5py.File(dataset_path, 'r') as hf:
-            trials = [hf[obj_ref] for obj_ref in hf['D'][0]]
+            trials = [hf[obj_ref] for obj_ref in hf[dataset_name][0]]
             for idx, trial in enumerate(trials):
-                # read data
-                X = trial['ieeg'][:]
-                if X.ndim < 2:
-                    logger.warning('irregular trial shape encountered. Trial%d will be ignored' % (idx+1))
+                # ignore trials if there isn't enough input for one training sample
+                if trial['ieeg'].shape[1] < cfg.TRAINING.CROP_LEN:
                     continue
-                np.testing.assert_equal(X, datasets_list[idx][0], 'iEEG channels did not match')
-                datasets_list[idx][1] = np.c_[datasets_list[idx][1],
-                                              trial['traj'][:][:].squeeze()]
+
+                # read data
+                y = trial['traj'][:][:].squeeze()
+                srate = int(trial['srate'][:][:])
+                if srate > cfg.TRAINING.OUTPUT_SAMPLING_RATE:
+                    # we need to downsample the targets
+                    y = resample(y, srate, cfg.TRAINING.OUTPUT_SAMPLING_RATE, axis=0)
+
+                else:
+                    assert srate == cfg.TRAINING.OUTPUT_SAMPLING_RATE, \
+                        'The desired sampling rate "{}" is larger than the original sampling rate "{}"!'.format(
+                            cfg.TRAINING.OUTPUT_SAMPLING_RATE, srate)
+
+                assert y.shape == datasets_list[1].shape, "shape miss-match between targets in different tasks!"
+                datasets_list[idx][1] = np.c_[datasets_list[idx][1], y]
 
     return datasets_list, in_channels
 
