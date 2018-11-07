@@ -137,8 +137,8 @@ def main(mode, configs, dataset_dir, subject, log_dir, n_splits, task):
 
                 training_trials = [trials[idx] for idx in train_split]
                 valid_trials = [trials[idx] for idx in valid_split]
-                corr, mse = run_cv_experiment(model, optimizer, scheduler, loss_fun, metric, training_trials,
-                                              training_writer, valid_trials, valid_writer, weights_path, cuda=CUDA)
+                corr, mse = training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials,
+                                          training_writer, valid_trials, valid_writer, weights_path, cuda=CUDA)
                 if task == 'multi':
                     for task_idx in range(len(corr)):
                         df.loc[(rec_name, 'fold' + str(fold_idx)), TASK_NAMES[task_idx]] = \
@@ -151,11 +151,13 @@ def main(mode, configs, dataset_dir, subject, log_dir, n_splits, task):
 
         elif mode == 'train':
             model, optimizer, scheduler, loss_fun, metric = create_model(in_channels, num_classes, CUDA)
+
             weights_path = os.path.join(log_dir, rec_name, 'weights.pt')
 
             training_writer = SummaryWriter(os.path.join(log_dir, rec_name, 'train'))
-            corr, mse = run_training(model, optimizer, scheduler, loss_fun, metric, trials, training_writer,
-                                     weights_path, cuda=CUDA)
+
+            corr, mse = training_loop(model, optimizer, scheduler, loss_fun, metric, trials, training_writer,
+                                      weights_path=weights_path, cuda=CUDA)
 
             if task == 'multi':
                 for task_idx in range(len(corr)):
@@ -173,7 +175,7 @@ def main(mode, configs, dataset_dir, subject, log_dir, n_splits, task):
 
             weights_path = os.path.join(train_path, rec_name, 'weights.pt')
             assert os.path.exists(weights_path), 'No weights are detected for this recording!'
-            corr, mse = run_eval(model, loss_fun, metric, trials, weights_path, cuda=CUDA)
+            corr, mse = eval_model(model, loss_fun, metric, trials, weights_path, cuda=CUDA)
 
             if task == 'multi':
                 for task_idx in range(len(corr)):

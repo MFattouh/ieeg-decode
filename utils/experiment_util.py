@@ -16,7 +16,6 @@ from torch import optim
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import torch.nn as nn
 
-
 logger = logging.getLogger('__name__')
 
 
@@ -144,7 +143,7 @@ def create_model(in_channels, num_classes, cuda=True):
                 break
             new_model.add_module(name, module)
 
-        # lets remove empty final dimension
+        # remove empty final dimension
         def squeeze_out(x):
             assert x.size()[1] == num_classes and x.size()[3] == 1
             return x.squeeze()
@@ -220,7 +219,7 @@ def create_model(in_channels, num_classes, cuda=True):
     return model, optimizer, scheduler, loss_fun, metric
 
 
-def evaluate(model, data_loader, loss_fun, metric, keep_state=False, writer=None, epoch=0, cuda=False):
+def evaluate_one_epoch(model, data_loader, loss_fun, metric, keep_state=False, writer=None, epoch=0, cuda=False):
     model.eval()
     # loop over the dataset
     avg_loss = 0
@@ -288,7 +287,7 @@ def evaluate(model, data_loader, loss_fun, metric, keep_state=False, writer=None
     return avg_loss, avg_corr, preds
 
 
-def train(model, data_loader, optimizer, loss_fun, keep_state=False, clip=0, cuda=False):
+def train_one_epoch(model, data_loader, optimizer, loss_fun, keep_state=False, clip=0, cuda=False):
     model.train()
     for itr, (data, target_cpu) in enumerate(data_loader):
         # data, target = Variable(data.transpose(1, 0)), Variable(target_cpu.squeeze(0))
@@ -298,7 +297,7 @@ def train(model, data_loader, optimizer, loss_fun, keep_state=False, clip=0, cud
 
         optimizer.zero_grad()
         # detach to stop back-propagation to older state
-        if keep_state:
+        if cfg.TRAINING.MODEL.lower() in ('hybrid', 'rnn') and keep_state:
             if model.rnn_type == 'lstm':
                 for h in hidden:
                     h.detach_()
@@ -320,11 +319,11 @@ def train(model, data_loader, optimizer, loss_fun, keep_state=False, clip=0, cud
         optimizer.step()
 
 
-def run_eval(model, loss_fun, metric, valid_trials, weights_path, cuda):
+def eval_model(model, loss_fun, metric, valid_trials, weights_path, cuda):
     valid_loader = create_eval_loader(valid_trials)
     assert os.path.exists(weights_path), 'weights_path does not exists'
     model.load_state_dict(torch.load(weights_path))
-    valid_loss, valid_corr, preds = evaluate(model, valid_loader, loss_fun, metric, keep_state=False, cuda=cuda)
+    valid_loss, valid_corr, preds = evaluate_one_epoch(model, valid_loader, loss_fun, metric, keep_state=False, cuda=cuda)
 
     if cfg.EVAL.SAVE_PREDICTIONS:
         preds_dir = os.path.join(os.path.dirname(weights_path), 'predictions')
@@ -334,21 +333,25 @@ def run_eval(model, loss_fun, metric, valid_trials, weights_path, cuda):
     return valid_corr, valid_loss
 
 
-def run_training(model, optimizer, scheduler, loss_fun, metric, training_trials, training_writer, weights_path, cuda):
+def training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials, training_writer,
+                  valid_trials=[], valid_writer=None, weights_path=None, cuda=True):
     training_loader = create_training_loader(training_trials)
-    eval_loader = create_eval_loader(training_trials)
+    training_eval_loader = create_training_loader(training_trials)
+    if valid_trials:
+        valid_loader = create_eval_loader(valid_trials)
 
     if cfg.EVAL.SAVE_PREDICTIONS:
+        assert weights_path, 'weights_path is required with SAVE PREDICTIONS'
         preds_dir = os.path.join(os.path.dirname(weights_path), 'predictions')
         if not os.path.exists(preds_dir):
             os.makedirs(preds_dir)
 
     if os.path.exists(weights_path):
-        weights_file_name, ext = os.path.splitext(weights_path)
         model.load_state_dict(torch.load(weights_path))
-        weights_path = weights_file_name + '_best' + ext
+        weights_dir, ext = os.path.splitext(weights_path)
+        weights_path = weights_dir + '_best' + ext
+
     min_loss = float('inf')
-    last_best = 0
     for epoch in range(cfg.TRAINING.MAX_EPOCHS+1):
         if epoch % cfg.TRAINING.EVAL_TRAIN_EVERY == 0 or epoch % cfg.TRAINING.EVAL_VALID_EVERY == 0:
             logger.info(f"===========epoch: {epoch}=============")
@@ -356,125 +359,69 @@ def run_training(model, optimizer, scheduler, loss_fun, metric, training_trials,
 
         # report init. error before training
         if epoch == 0:
-            train_loss, train_corr, preds = evaluate(model, eval_loader, loss_fun, metric, keep_state=False,
-                                                     writer=training_writer, epoch=epoch, cuda=cuda)
-            if cfg.EVAL.SAVE_PREDICTIONS:
-                np.savetxt(os.path.join(preds_dir, f'{epoch}.csv'), preds, delimiter=',')
-
+            train_loss, train_corr, _ = evaluate_one_epoch(model, training_eval_loader, loss_fun, metric, keep_state=False,
+                                                           writer=training_writer, epoch=epoch, cuda=cuda)
             logger.info(f'init. training loss value: {train_loss}')
             logger.info(f'init. training corr: {train_corr}')
+
+            if valid_trials:
+                valid_loss, valid_corr, preds = evaluate_one_epoch(model, valid_loader, loss_fun, metric, keep_state=False,
+                                                                   writer=valid_writer, epoch=epoch, cuda=cuda)
+                if cfg.EVAL.SAVE_PREDICTIONS:
+                    np.savetxt(os.path.join(preds_dir, f'{epoch}.csv'), preds, delimiter=',')
+                logger.info(f'init. valid loss: {valid_loss}')
+                logger.info(f'init. valid corr: {valid_corr}')
 
             if type(train_corr) == dict:
                 max_acc = dict(zip(list(train_corr.keys()), [-float('inf')] * len(train_corr)))
             else:
                 max_acc = -float('inf')
 
+            if not valid_trials:
+                # training without validation set. dummy valid corr coeff. value
+                valid_corr = max_acc
+
             continue
 
         if scheduler is not None:
             scheduler.step(epoch-1)
 
-        train(model, training_loader, optimizer, loss_fun, keep_state=False, clip=0, cuda=cuda)
+        train_one_epoch(model, training_loader, optimizer, loss_fun, keep_state=False, clip=0, cuda=cuda)
 
         if epoch % cfg.TRAINING.EVAL_TRAIN_EVERY == 0:
-            train_loss, train_corr, preds = evaluate(model, eval_loader, loss_fun, metric, keep_state=False,
-                                                     writer=training_writer, epoch=epoch, cuda=cuda)
-            if cfg.EVAL.SAVE_PREDICTIONS:
-                np.savetxt(os.path.join(preds_dir, f'{epoch}.csv'), preds, delimiter=',')
+            if training_writer is not None:
+                for tag, value in model.named_parameters():
+                    tag = tag.replace('.', '/')
+                    training_writer.add_histogram(tag, value.data.cpu().numpy(), epoch + 1)
+                    training_writer.add_histogram(tag + '/grad', value.grad.data.cpu().numpy(), epoch + 1)
 
+            train_loss, train_corr, preds = evaluate_one_epoch(model, training_eval_loader, loss_fun, metric, keep_state=False,
+                                                               writer=training_writer, epoch=epoch, cuda=cuda)
+            if cfg.EVAL.SAVE_PREDICTIONS:
+                np.savetxt(os.path.join(preds_dir, f'training_preds{epoch}.csv'), preds, delimiter=',')
             logger.info(f'training loss: {train_loss}')
             logger.info(f'training corr: {train_corr}')
 
-            if train_loss < min_loss:
-                logger.info(f'found new valid loss: {train_loss}')
-                min_loss = train_loss
-                last_best = epoch
+            #  training without validation set. report training loss and corr. coeff.
+            if not valid_trials:
+                if train_loss < min_loss:
+                    logger.info(f'found new training loss: {train_loss}')
+                    min_loss = train_loss
+                    last_best = epoch
 
             if type(train_corr) == dict:
                 for task, corr in train_corr.items():
                     if corr > max_acc[task]:
                         max_acc[task] = corr
 
-            elif train_corr > max_acc:
-                max_acc = train_corr
+                elif train_corr > max_acc:
+                    max_acc = train_corr
 
-        # if training stalls
-        if type(train_corr) == dict:
-            if np.any(np.isnan(list(train_corr.values()))) or np.any(np.isnan(list(train_corr.values()))):
-                logger.error('Training stalled')
-                break
-        else:
-            if np.isnan(train_corr) or np.isnan(train_corr):
-                logger.error('Training stalled')
-                break
-
-    # report best values
-    logger.info(f'Best valid loss: {min_loss}')
-    logger.info(f'Best valid corr: {max_acc}')
-
-    # save model parameters
-    torch.save(model.state_dict(), weights_path)
-    return max_acc, min_loss
-
-
-def run_cv_experiment(model, optimizer, scheduler, loss_fun, metric, training_trials, training_writer, valid_trials,
-                      valid_writer, weights_path, cuda):
-    training_loader = create_training_loader(training_trials)
-    training_eval_loader = create_training_loader(training_trials)
-    valid_loader = create_eval_loader(valid_trials)
-
-    if cfg.EVAL.SAVE_PREDICTIONS:
-        preds_dir = os.path.join(os.path.dirname(weights_path), 'predictions')
-        if not os.path.exists(preds_dir):
-            os.makedirs(preds_dir)
-
-    if os.path.exists(weights_path):
-        model.load_state_dict(torch.load(weights_path))
-        path, ext = os.path.splitext(weights_path)
-        weights_path = path + '_best' + ext
-    min_loss = float('inf')
-    for epoch in range(cfg.TRAINING.MAX_EPOCHS+1):
-        if epoch % cfg.TRAINING.EVAL_TRAIN_EVERY == 0 or epoch % cfg.TRAINING.EVAL_VALID_EVERY == 0:
-            logger.info(f"===========epoch: {epoch}=============")
-            logger.info(f"Started at: {datetime.datetime.now():%d %b: %H:%M}")
-
-        # report init. error before training
-        if epoch == 0:
-            train_loss, train_corr, _ = evaluate(model, training_eval_loader, loss_fun, metric, keep_state=False,
-                                              writer=training_writer, epoch=epoch, cuda=cuda)
-            logger.info(f'init. training loss value: {train_loss}')
-            logger.info(f'init. training corr: {train_corr}')
-
-            valid_loss, valid_corr, preds = evaluate(model, valid_loader, loss_fun, metric, keep_state=False,
-                                              writer=valid_writer, epoch=epoch, cuda=cuda)
+        if valid_trials and epoch % cfg.TRAINING.EVAL_VALID_EVERY == 0:
+            valid_loss, valid_corr, preds = evaluate_one_epoch(model, valid_loader, loss_fun, metric, keep_state=False,
+                                                               writer=valid_writer, epoch=epoch, cuda=cuda)
             if cfg.EVAL.SAVE_PREDICTIONS:
-                np.savetxt(os.path.join(preds_dir, f'{epoch}.csv'), preds, delimiter=',')
-            logger.info(f'init. valid loss: {valid_loss}')
-            logger.info(f'init. valid corr: {valid_corr}')
-
-            if type(train_corr) == dict:
-                max_acc = dict(zip(list(train_corr.keys()), [-float('inf')] * len(train_corr)))
-            else:
-                max_acc = -float('inf')
-
-            continue
-
-        if scheduler is not None:
-            scheduler.step(epoch-1)
-
-        train(model, training_loader, optimizer, loss_fun, keep_state=False, clip=0, cuda=cuda)
-
-        if epoch % cfg.TRAINING.EVAL_TRAIN_EVERY == 0:
-            train_loss, train_corr, _ = evaluate(model, training_eval_loader, loss_fun, metric, keep_state=False,
-                                              writer=training_writer, epoch=epoch, cuda=cuda)
-            logger.info(f'training loss: {train_loss}')
-            logger.info(f'training corr: {train_corr}')
-
-        if epoch % cfg.TRAINING.EVAL_VALID_EVERY == 0:
-            valid_loss, valid_corr, preds = evaluate(model, valid_loader, loss_fun, metric, keep_state=False,
-                                              writer=valid_writer, epoch=epoch, cuda=cuda)
-            if cfg.EVAL.SAVE_PREDICTIONS:
-                np.savetxt(os.path.join(preds_dir, f'{epoch}.csv'), preds, delimiter=',')
+                np.savetxt(os.path.join(preds_dir, f'valid_preds{epoch}.csv'), preds, delimiter=',')
 
             logger.info(f'valid loss: {valid_loss}')
             logger.info(f'valid corr: {valid_corr}')
@@ -504,8 +451,10 @@ def run_cv_experiment(model, optimizer, scheduler, loss_fun, metric, training_tr
                 logger.error('Training stalled')
                 break
 
+    torch.save(model.state_dict(), weights_dir + '_final' + ext)
+
     # report best values
-    logger.info(f'Best valid loss: {min_loss}')
-    logger.info(f'Best valid corr: {max_acc}')
+    logger.info(f'Best loss value: {min_loss}')
+    logger.info(f'Best corr value: {max_acc}')
 
     return max_acc, min_loss
