@@ -149,8 +149,9 @@ def create_training_loader(trials):
                     x2y_ratio=cfg.TRAINING.INPUT_SAMPLING_RATE / cfg.TRAINING.OUTPUT_SAMPLING_RATE,
                     input_shape='ct', dummy_idx=cfg.TRAINING.DUMMY_IDX) for (X, y) in trials])
 
-    training_loader = DataLoader(training_dataset, batch_size=cfg.TRAINING.BATCH_SIZE, shuffle=True, drop_last=False,
-                                 pin_memory=True, num_workers=4)
+    batch_sampler = BalancedBatchSampler(training_dataset, batch_size=cfg.TRAINING.BATCH_SIZE, shuffle=True)
+
+    training_loader = DataLoader(training_dataset, batch_sampler=batch_sampler, pin_memory=True, num_workers=4)
     return training_loader
 
 

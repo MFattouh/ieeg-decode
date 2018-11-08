@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler, SequentialSampler, RandomSampler
 from torch.autograd import Variable
 from braindecode.datautil.signalproc import exponential_running_standardize
 from sklearn.preprocessing import MinMaxScaler
@@ -117,12 +117,75 @@ def load_trial(dataset_file, trial, full_load=True):
     return X, y, trial.attrs['srate']
 
 
+class BalancedBatchSampler(Sampler):
+    r"""Batch sampler which returns mini-batches with a **maximum** one sample difference. \n
+    The returned mini-batches contains a **minimum** *batch_size* samples.
+
+    Args:
+        data_source (Dataset): source data to sample from.
+        batch_size (int): Size of mini-batch.
+        shuffle (bool): If ``True``, the sampler will shuffle the samples
+
+    Example:
+        >>> list(BatchSampler(range(10), batch_size=3))
+        [[0, 1, 2, 3], [4, 5, 6], [7, 8, 9]]
+    """
+
+    def __init__(self, data_source, batch_size, shuffle=False):
+        if not isinstance(batch_size, int) or batch_size <= 0:
+            raise ValueError("batch_size should be a positive integeral value, "
+                             "but got batch_size={}".format(batch_size))
+        if not isinstance(shuffle, bool):
+            raise ValueError("shuffle should be a boolean value, but got "
+                             "shuffle={}".format(shuffle))
+        if shuffle:
+            self.sampler = RandomSampler(data_source)
+        else:
+            self.sampler = SequentialSampler(data_source)
+        self.batch_size = batch_size
+        num_valid_batches = len(self.sampler) // self.batch_size
+        num_left_over_samples = len(self.sampler) % self.batch_size
+        assert num_left_over_samples < self.batch_size
+        if num_valid_batches == 0:
+            self.batch_sizes = [num_left_over_samples]
+        else:
+            self.batch_sizes = [self.batch_size] * num_valid_batches
+            if batch_size - num_left_over_samples > 1:
+                batch_id = -1
+                while num_left_over_samples > 0:
+                    batch_id = (batch_id + 1) % num_valid_batches
+                    self.batch_sizes[batch_id] += 1
+                    num_left_over_samples -= 1
+
+            elif batch_size - num_left_over_samples == 1:
+                self.batch_sizes.append(num_left_over_samples)
+
+    def __iter__(self):
+            batch = []
+            batch_id = 0
+            for idx in self.sampler:
+                batch.append(idx)
+                if len(batch) == self.batch_sizes[batch_id]:
+                    yield batch
+                    batch = []
+                    batch_id += 1
+
+    def __len__(self):
+        return len(self.batch_sizes)
+
+
 class ECoGDatast(Dataset):
     def __init__(self, X, y, window=1, stride=1, x2y_ratio=1, input_shape='tc', time_last=True, dummy_idx='f'):
-        '''
-        param: X is an nd array with first dim is time axis
-        y is
-        '''
+        """
+        :param X:
+        :param y:
+        :param window:
+        :param stride:
+        :param x2y_ratio:
+        :param input_shape:
+        :param time_last:
+        :param dummy_idx:
+        """
         self.input_shape = input_shape.lower()
         assert self.input_shape in ['ct', 'tc'], 'input shape "%s" not understood. Only "CT" and "TC" are supported'\
                                                  % input_shape
