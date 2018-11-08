@@ -442,7 +442,7 @@ def training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials
         train_one_epoch(model, training_loader, optimizer, loss_fun, keep_state=False, clip=0, cuda=cuda)
 
         if epoch % cfg.TRAINING.EVAL_TRAIN_EVERY == 0:
-            if training_writer is not None:
+            if training_writer is not None and cfg.TRAINING.WEIGHT_STATS:
                 for tag, value in model.named_parameters():
                     tag = tag.replace('.', '/')
                     training_writer.add_histogram(tag, value.data.cpu().numpy(), epoch + 1)
