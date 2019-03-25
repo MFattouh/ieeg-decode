@@ -4,11 +4,11 @@ HYBRID:
     NUM_LAYERS: 3
     HIDDEN_SIZE: 64
     DROPOUT: [[0.3]]
-    WEIGHTS_DROPOUT: ['weight_ih_l0', 'weight_ih_l1', 'weight_ih_l2', 'weight_hh_l0', 'weight_hh_l1', 'weight_hh_l2']
+    WEIGHTS_DROPOUT: ['weight_ih_l0', 'weight_hh_l0']
     NORMALIZATION: None
     MAX_LENGTH: 0  # maximum sequence length (required for BNLSTM)
-
-  OUTPUT_STRIDE: 682  # results in one target per crop
+    POOLING_KERNELS: [5]
+    POOLING_STRIDES: [5]
 
   # L2POOLING
   L2POOLING:
@@ -22,19 +22,15 @@ HYBRID:
 
 TRAINING:
   MODEL: 'RNN'
-  CROP_LEN: 682
-  INPUT_STRIDE: 1
   MAX_EPOCHS: 500
-  EVAL_TRAIN_EVERY: 5
-  EVAL_VALID_EVERY: 5
-  INPUT_SAMPLING_RATE: 250      # [Hz]
-  OUTPUT_SAMPLING_RATE: 250     # [Hz]
-  BATCH_SIZE: 256
+  INPUT_SAMPLING_RATE: 250
+  OUTPUT_SAMPLING_RATE: 50
+  EVAL_TRAIN_EVERY: 1
+  EVAL_VALID_EVERY: 1
+  BATCH_SIZE: 32
   DUMMY_IDX: 'f'
-  OUTPUT_SEQ_LEN: 1
-
-EVAL:
-  INPUT_STRIDE: 1
+  OUTPUT_SEQ_LEN: 663  # this is equivalent to pooling with kernel & stride = 5 on top of 3319 predictions of deep4
+  RANDOM_SEED: 10418
 
 OPTIMIZATION:
   OPTIMIZER: 'adam'

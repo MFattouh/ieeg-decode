@@ -15,6 +15,8 @@ __C.HYBRID.SPATIAL_CONVS.ACTIVATIONS = 'tanh'
 __C.HYBRID.TEMPORAL_CONVS = dict()
 __C.HYBRID.TEMPORAL_CONVS.ENABLED = False
 __C.HYBRID.TEMPORAL_CONVS.NUM_FILTERS = []  # number of output filters for each layer
+__C.HYBRID.TEMPORAL_CONVS.KERNEL_SIZE = []  # kernel size for each layer
+__C.HYBRID.TEMPORAL_CONVS.DILATIONS = []   # kernel dilation for each layer
 __C.HYBRID.TEMPORAL_CONVS.BATCH_NORM = False
 __C.HYBRID.TEMPORAL_CONVS.ACTIVATIONS = 'tanh'
 
@@ -22,11 +24,14 @@ __C.HYBRID.TEMPORAL_CONVS.ACTIVATIONS = 'tanh'
 __C.HYBRID.RNN = dict()
 __C.HYBRID.RNN.RNN_TYPE = 'gru'
 __C.HYBRID.RNN.NORMALIZATION = None  # 'batch_norm' is supported, 'weight_norm' will be supported soon
-__C.HYBRID.RNN.DROPOUT = 0           # or a list of values
+__C.HYBRID.RNN.DROPOUT = [[]]           # or a list of values
 __C.HYBRID.RNN.WEIGHTS_DROPOUT = []  # ['weight_ih_l0', 'weight_ih_l1', 'weight_ih_l2', 'weight_hh_l0', 'weight_hh_l1', 'weight_hh_l2']
 __C.HYBRID.RNN.MAX_LENGTH = 0        # maximum sequence length (required for BNLSTM)
 __C.HYBRID.RNN.HIDDEN_SIZE = 64
 __C.HYBRID.RNN.NUM_LAYERS = 3
+__C.HYBRID.RNN.POOLING_KERNELS = []
+__C.HYBRID.RNN.POOLING_STRIDES = []
+
 # Stride
 __C.HYBRID.OUTPUT_STRIDE = 1
 
@@ -56,10 +61,13 @@ __C.TRAINING.BATCH_SIZE = 32
 __C.TRAINING.DUMMY_IDX = ''
 __C.TRAINING.OUTPUT_SEQ_LEN = 0
 __C.TRAINING.WEIGHT_STATS = False
+__C.TRAINING.KEEP_STATE = False
+__C.TRAINING.GRAD_CLIP = 0
 
 __C.EVAL = dict()
 __C.EVAL.INPUT_STRIDE = 16 * 250 - 681      # [samples]
 __C.EVAL.SAVE_PREDICTIONS = False
+__C.EVAL.DATASET = 'F'
 
 __C.OPTIMIZATION = dict()
 __C.OPTIMIZATION.OPTIMIZER = 'adam'

@@ -8,7 +8,7 @@ HYBRID:
     NORMALIZATION: None
     MAX_LENGTH: 0  # maximum sequence length (required for BNLSTM)
 
-  OUTPUT_STRIDE: 682  # results in one target per crop
+  OUTPUT_STRIDE: 4000  # results in one target per crop
 
   # L2POOLING
   L2POOLING:
@@ -22,16 +22,18 @@ HYBRID:
 
 TRAINING:
   MODEL: 'RNN'
-  CROP_LEN: 682
+  CROP_LEN: 4000
   INPUT_STRIDE: 1
   MAX_EPOCHS: 500
-  EVAL_TRAIN_EVERY: 5
+  EVAL_TRAIN_EVERY: 1
   EVAL_VALID_EVERY: 5
   INPUT_SAMPLING_RATE: 250      # [Hz]
   OUTPUT_SAMPLING_RATE: 250     # [Hz]
-  BATCH_SIZE: 256
+  BATCH_SIZE: 32
   DUMMY_IDX: 'f'
   OUTPUT_SEQ_LEN: 1
+  WEIGHT_STATS: True
+#  GRAD_CLIP: 0.5
 
 EVAL:
   INPUT_STRIDE: 1
