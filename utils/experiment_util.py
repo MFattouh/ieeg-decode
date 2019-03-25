@@ -8,10 +8,11 @@ import datetime
 from utils.config import cfg
 from braindecode.models.util import to_dense_prediction_model
 from braindecode.torch_ext.modules import Expression
+from models.hybrid import HybridModel
 from braindecode.models.deep4 import Deep4Net
+from models.deep5net import Deep5Net
 from braindecode.models.shallow_fbcsp import ShallowFBCSPNet as Shallow
 from torch.nn.functional import mse_loss
-from models.hybrid import HybridModel
 from torch import optim
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import torch.nn as nn
@@ -32,7 +33,7 @@ def read_dataset(dataset_path, dataset_name):
 
             # read data
             X = trial['ieeg'][:]
-            y = trial['traj'][:][:].squeeze()
+            y = trial['traj'][:][:].T
 
             # resample if necessary
             srate = int(trial['srate'][:][:])
@@ -114,6 +115,7 @@ def lr_finder(model, loss_fun, optimizer, training_trials, output_path, min_lr=-
             try:
                 data, target = next(training_iterator)
             except StopIteration:
+                del training_iterator
                 training_iterator = iter(training_loader)
                 data, target = next(training_iterator)
 
@@ -170,6 +172,10 @@ def make_weights(crop_len, num_relaxed_samples, dtype='qubic'):
 
 
 def create_model(in_channels, num_classes, cuda=True):
+    def squeeze_out(x):
+        assert x.size()[1] == num_classes and x.size()[3] == 1
+        return x.squeeze(3).transpose(1, 2)
+
     num_relaxed_samples = 681
     if cfg.TRAINING.MODEL.lower() == 'rnn':
         model = HybridModel(in_channels=in_channels, output_stride=int(cfg.HYBRID.OUTPUT_STRIDE))
@@ -186,6 +192,8 @@ def create_model(in_channels, num_classes, cuda=True):
             metric = CorrCoeff(weights).weighted_corrcoef
 
     elif cfg.TRAINING.MODEL.lower() == 'deep4':
+        #  pool_time_length=3
+        #  pool_time_stride=3
         model = Deep4Net(in_chans=in_channels, n_classes=num_classes, input_time_length=cfg.TRAINING.CROP_LEN,
                          final_conv_length=2, stride_before_pool=True).create_network()
 
@@ -197,19 +205,42 @@ def create_model(in_channels, num_classes, cuda=True):
                 break
             new_model.add_module(name, module)
 
-        # remove empty final dimension
-        def squeeze_out(x):
-            assert x.size()[1] == num_classes and x.size()[3] == 1
-            return x.squeeze()
-            # assert x.size()[1] == 1 and x.size()[3] == 1
-            # return x[:, 0, :, 0]
-
+        # remove empty final dimension and permute output shape
         new_model.add_module('squeeze', Expression(squeeze_out))
-        if num_classes > 1:
-            def transpose_class_time(x):
-                return x.transpose(2, 1)
+        # if num_classes > 1:
+        #     def transpose_class_time(x):
+        #         return x.transpose(2, 1)
+        #
+        #     new_model.add_module('trans', Expression(transpose_class_time))
 
-            new_model.add_module('trans', Expression(transpose_class_time))
+        model = new_model
+
+        to_dense_prediction_model(model)
+
+        loss_fun = mse_loss
+        metric = CorrCoeff().corrcoeff
+
+    elif cfg.TRAINING.MODEL.lower() == 'deep5':
+        #  pool_time_length=3
+        #  pool_time_stride=3
+        model = Deep5Net(in_chans=in_channels, n_classes=num_classes, input_time_length=cfg.TRAINING.CROP_LEN,
+                         final_conv_length=2, stride_before_pool=True).create_network()
+
+        # remove softmax
+        new_model = nn.Sequential()
+        for name, module in model.named_children():
+            if name == 'softmax':
+                # continue
+                break
+            new_model.add_module(name, module)
+
+        # remove empty final dimension and permute output shape
+        new_model.add_module('squeeze', Expression(squeeze_out))
+        # if num_classes > 1:
+        #     def transpose_class_time(x):
+        #         return x.transpose(2, 1)
+        #
+        #     new_model.add_module('trans', Expression(transpose_class_time))
 
         model = new_model
 
@@ -229,12 +260,7 @@ def create_model(in_channels, num_classes, cuda=True):
                 break
             new_model.add_module(name, module)
 
-        # lets remove empty final dimension
-        def squeeze_out(x):
-            assert x.size()[1] == num_classes and x.size()[3] == 1
-            return x.squeeze()
-            # return x[:, 0, :, 0]
-
+        # remove empty final dimension and permute output shape
         new_model.add_module('squeeze', Expression(squeeze_out))
         model = new_model
 
@@ -248,6 +274,7 @@ def create_model(in_channels, num_classes, cuda=True):
             weights_tensor = weights_tensor.cuda()
         loss_fun = WeightedMSE(weights_tensor)
         metric = CorrCoeff(weights).weighted_corrcoef
+
     elif cfg.TRAINING.MODEL.lower() == 'hybrid':
         cfg.HYBRID.SPATIAL_CONVS['num_filters'] = [in_channels]
         model = HybridModel(in_channels=in_channels, output_stride=int(cfg.HYBRID.OUTPUT_STRIDE))
@@ -270,21 +297,22 @@ def create_model(in_channels, num_classes, cuda=True):
         model.cuda()
 
     metric = lambda targets, predictions: np.corrcoef(targets, predictions)[0, 1]
+    loss_fun = mse_loss
+    logger.info(model)
     return model, optimizer, scheduler, loss_fun, metric
 
 
 def evaluate_one_epoch(model, data_loader, loss_fun, metric, keep_state=False, writer=None, epoch=0, cuda=False):
     model.eval()
-    # loop over the dataset
     avg_loss = 0
     targets = []
     preds = []
     with torch.no_grad():
+        # loop over the dataset
         for itr, (data, target_cpu) in enumerate(data_loader):
             data, target = Variable(data), Variable(target_cpu)
             if cuda:
                 data, target = data.cuda(), target.cuda()
-
             if keep_state:
                 if itr == 0:
                     hidden = None
@@ -298,39 +326,31 @@ def evaluate_one_epoch(model, data_loader, loss_fun, metric, keep_state=False, w
             else:
                 output = model(data)
 
-            output = output.squeeze()
             output_size = list(output.size())
-            seq_len = output_size[1] if len(output_size) > 1 else output_size[0]
-            batch_size = output_size[0] if len(output_size) > 1 else 1
-            num_classes = output_size[2] if len(output_size) > 2 else 1
-            if batch_size == 1:
-                output = output.unsqueeze(0)
+            batch_size, num_classes = output_size[0], output_size[-1]
             # loss value
-            avg_loss += loss_fun(output, target[:, -seq_len:]).cpu().numpy().squeeze()
+            avg_loss += loss_fun(output[:, -cfg.TRAINING.OUTPUT_SEQ_LEN:], target[:, -cfg.TRAINING.OUTPUT_SEQ_LEN:]).item()
             # compute the correlation coff. for each seq. in batch
-            target = target_cpu[:, -cfg.TRAINING.OUTPUT_SEQ_LEN:].numpy().squeeze()
-            output = output[:, -cfg.TRAINING.OUTPUT_SEQ_LEN:].cpu().numpy().squeeze()
-            if num_classes > 1:
-                target = target.transpose(0, 2)
-                output = output.transpose(0, 2)
+            target = target_cpu[:, -cfg.TRAINING.OUTPUT_SEQ_LEN:, ].numpy()
+            output = output[:, -cfg.TRAINING.OUTPUT_SEQ_LEN:, ].cpu().numpy()
 
-            target = target.reshape(num_classes, -1)
-            output = output.reshape(num_classes, -1)
+            output = output.transpose((2, 1, 0)).reshape(num_classes, -1)
+            target = target.transpose((2, 1, 0)).reshape(num_classes, -1)
 
             preds.append(output)
             targets.append(target)
 
     # divide by the number of mini-batches
     avg_loss /= len(data_loader)
-    targets = np.hstack(targets).squeeze()
-    preds = np.hstack(preds).squeeze()
-    num_classes = targets.shape[0] if len(targets.shape) > 1 else 1
+    targets = np.hstack(targets)
+    preds = np.hstack(preds)
+    num_classes = targets.shape[0]
     if num_classes > 1:
         avg_corr = dict()
         for class_idx in range(num_classes):
-            avg_corr[f"Class{class_idx}"] = metric(targets[class_idx, ], preds[class_idx, ])
+            avg_corr[f"Class{class_idx}"] = metric(targets[class_idx, ].squeeze(), preds[class_idx, ].squeeze())
     else:
-        avg_corr = metric(targets, preds)
+        avg_corr = metric(targets.squeeze(), preds.squeeze())
 
     if writer is not None:
         writer.add_scalar('loss', avg_loss, epoch)
@@ -338,7 +358,7 @@ def evaluate_one_epoch(model, data_loader, loss_fun, metric, keep_state=False, w
             writer.add_scalar('corr', avg_corr, epoch)
         else:
             writer.add_scalars('corr', avg_corr, epoch)
-    return avg_loss, avg_corr, preds
+    return avg_loss, avg_corr, targets, preds
 
 
 def train_one_epoch(model, data_loader, optimizer, loss_fun, keep_state=False, clip=0, cuda=False):
@@ -363,12 +383,10 @@ def train_one_epoch(model, data_loader, optimizer, loss_fun, keep_state=False, c
         else:
             output = model(data)
 
-        output_size = list(output.size())
-        seq_len = output_size[1] if len(output_size) > 1 else output_size[0]
-        loss = loss_fun(output.squeeze(), target[:, -seq_len:].squeeze())
+        loss = loss_fun(output[:, -cfg.TRAINING.OUTPUT_SEQ_LEN:], target[:, -cfg.TRAINING.OUTPUT_SEQ_LEN:])
         loss.backward()
         if clip > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
+            torch.nn.utils.clip_grad_value_(model.parameters(), clip)
 
         optimizer.step()
 
@@ -377,22 +395,26 @@ def eval_model(model, loss_fun, metric, valid_trials, weights_path, cuda):
     valid_loader = create_eval_loader(valid_trials)
     assert os.path.exists(weights_path), 'weights_path does not exists'
     model.load_state_dict(torch.load(weights_path))
-    valid_loss, valid_corr, preds = evaluate_one_epoch(model, valid_loader, loss_fun, metric, keep_state=False, cuda=cuda)
+    valid_loss, valid_corr, targets, preds = evaluate_one_epoch(model, valid_loader, loss_fun, metric, keep_state=False, cuda=cuda)
 
     if cfg.EVAL.SAVE_PREDICTIONS:
-        preds_dir = os.path.join(os.path.dirname(weights_path), 'predictions')
+        preds_dir = os.path.join(os.path.dirname(weights_path.replace('TRAIN', 'EVAL')), 'predictions')
         if not os.path.exists(preds_dir):
             os.makedirs(preds_dir)
         np.savetxt(os.path.join(preds_dir, 'predictions.csv'), preds, delimiter=',')
+        np.savetxt(os.path.join(preds_dir, 'targets.csv'), targets, delimiter=',')
     return valid_corr, valid_loss
 
 
 def training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials, training_writer,
                   valid_trials=[], valid_writer=None, weights_path=None, cuda=True):
     training_loader = create_training_loader(training_trials)
+    logger.info(f'Number of training mini-batches: {len(training_loader)}')
     training_eval_loader = create_training_loader(training_trials)
+
     if valid_trials:
         valid_loader = create_eval_loader(valid_trials)
+        logger.info(f'Number of validation mini-batches: {len(valid_loader)}')
 
     if cfg.EVAL.SAVE_PREDICTIONS:
         assert weights_path, 'weights_path is required with SAVE PREDICTIONS'
@@ -413,16 +435,17 @@ def training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials
 
         # report init. error before training
         if epoch == 0:
-            train_loss, train_corr, _ = evaluate_one_epoch(model, training_eval_loader, loss_fun, metric, keep_state=False,
+            train_loss, train_corr, _, _ = evaluate_one_epoch(model, training_eval_loader, loss_fun, metric, keep_state=False,
                                                            writer=training_writer, epoch=epoch, cuda=cuda)
             logger.info(f'init. training loss value: {train_loss}')
             logger.info(f'init. training corr: {train_corr}')
 
             if valid_trials:
-                valid_loss, valid_corr, preds = evaluate_one_epoch(model, valid_loader, loss_fun, metric, keep_state=False,
+                valid_loss, valid_corr, targets, preds = evaluate_one_epoch(model, valid_loader, loss_fun, metric, keep_state=False,
                                                                    writer=valid_writer, epoch=epoch, cuda=cuda)
                 if cfg.EVAL.SAVE_PREDICTIONS:
-                    np.savetxt(os.path.join(preds_dir, f'{epoch}.csv'), preds, delimiter=',')
+                    np.savetxt(os.path.join(preds_dir, f'preds_{epoch}.csv'), preds, delimiter=',')
+                    np.savetxt(os.path.join(preds_dir, f'targets_{epoch}.csv'), targets, delimiter=',')
                 logger.info(f'init. valid loss: {valid_loss}')
                 logger.info(f'init. valid corr: {valid_corr}')
 
@@ -440,19 +463,33 @@ def training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials
         if scheduler is not None:
             scheduler.step(epoch-1)
 
-        train_one_epoch(model, training_loader, optimizer, loss_fun, keep_state=False, clip=0, cuda=cuda)
+        train_one_epoch(model, training_loader, optimizer, loss_fun, keep_state=cfg.TRAINING.KEEP_STATE,
+                        clip=cfg.TRAINING.GRAD_CLIP, cuda=cuda)
 
         if epoch % cfg.TRAINING.EVAL_TRAIN_EVERY == 0:
             if training_writer is not None and cfg.TRAINING.WEIGHT_STATS:
-                for tag, value in model.named_parameters():
+                for tag, param in model.named_parameters():
+                    if not param.requires_grad:
+                        continue
                     tag = tag.replace('.', '/')
-                    training_writer.add_histogram(tag, value.data.cpu().numpy(), epoch + 1)
-                    training_writer.add_histogram(tag + '/grad', value.grad.data.cpu().numpy(), epoch + 1)
+                    weights = param.data.cpu()
+                    training_writer.add_histogram(tag, weights.numpy(), epoch + 1)
+                    training_writer.add_scalar('weights/' + tag + '/min', weights.min().item(), epoch + 1)
+                    training_writer.add_scalar('weights/' + tag + '/max', weights.max().item(), epoch + 1)
+                    training_writer.add_scalar('weights/' + tag + '/norm', weights.norm().item(), epoch + 1)
+                    training_writer.add_scalar('weights/' + tag + '/std', weights.std().item(), epoch + 1)
+                    grads = param.grad.data.cpu()
+                    training_writer.add_histogram('grads/' + tag, grads.numpy(), epoch + 1)
+                    training_writer.add_scalar('grads/' + tag + '/min', grads.min().item(), epoch + 1)
+                    training_writer.add_scalar('grads/' + tag + '/max', grads.max().item(), epoch + 1)
+                    training_writer.add_scalar('grads/' + tag + '/norm', grads.norm().item(), epoch + 1)
+                    training_writer.add_scalar('grads/' + tag + '/std', grads.std().item(), epoch + 1)
 
-            train_loss, train_corr, preds = evaluate_one_epoch(model, training_eval_loader, loss_fun, metric, keep_state=False,
+            train_loss, train_corr, targets, preds = evaluate_one_epoch(model, training_eval_loader, loss_fun, metric, keep_state=False,
                                                                writer=training_writer, epoch=epoch, cuda=cuda)
             if cfg.EVAL.SAVE_PREDICTIONS:
                 np.savetxt(os.path.join(preds_dir, f'training_preds{epoch}.csv'), preds, delimiter=',')
+                np.savetxt(os.path.join(preds_dir, f'training_targets{epoch}.csv'), targets, delimiter=',')
             logger.info(f'training loss: {train_loss}')
             logger.info(f'training corr: {train_corr}')
 
@@ -472,10 +509,11 @@ def training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials
                     max_acc = train_corr
 
         if valid_trials and epoch % cfg.TRAINING.EVAL_VALID_EVERY == 0:
-            valid_loss, valid_corr, preds = evaluate_one_epoch(model, valid_loader, loss_fun, metric, keep_state=False,
-                                                               writer=valid_writer, epoch=epoch, cuda=cuda)
+            valid_loss, valid_corr, targets, preds = evaluate_one_epoch(model, valid_loader, loss_fun, metric, keep_state=False,
+                                                                        writer=valid_writer, epoch=epoch, cuda=cuda)
             if cfg.EVAL.SAVE_PREDICTIONS:
                 np.savetxt(os.path.join(preds_dir, f'valid_preds{epoch}.csv'), preds, delimiter=',')
+                np.savetxt(os.path.join(preds_dir, f'valid_targets{epoch}.csv'), targets, delimiter=',')
 
             logger.info(f'valid loss: {valid_loss}')
             logger.info(f'valid corr: {valid_corr}')
@@ -511,4 +549,7 @@ def training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials
     logger.info(f'Best loss value: {min_loss}')
     logger.info(f'Best corr value: {max_acc}')
 
-    return max_acc, min_loss
+    if valid_trials is not None:
+        return valid_corr, valid_loss
+    else:
+        return train_corr, train_loss

@@ -31,7 +31,7 @@ class CorrCoeff:
 
     def weighted_corrcoef(self, targets, predictions):
         assert self.weights is not None, 'weighted corr coeff. needs weights'
-        # input should be NXS
+        # input should be NxS
         return np.corrcoef((targets * self.weights).reshape(1, -1).squeeze(),
                            (predictions * self.weights).reshape(1, -1).squeeze())[0, 1]
 
@@ -77,13 +77,13 @@ def crops_from_trial(X, y, crop_len, stride=0, time_last=True, dummy_idx=0, norm
             crop_idx = int(crop * stride)
         else:
             crop_idx = int(crop * crop_len)
-            
+
         x_crop = X[crop_idx:crop_idx + crop_len, ]
         y_crop = y[crop_idx:crop_idx + crop_len, ]
         if normalize:
                 y_crop = MinMaxScaler(feature_range=(-1, 1)).fit_transform(y_crop.reshape(-1, 1)).squeeze()
                 x_crop = exponential_running_standardize(x_crop, init_block_size=250, factor_new=0.001, eps=1e-4)
-        
+
         x_list.append(
             np.expand_dims(x_crop.T if time_last else x_crop, axis=dummy_idx).astype(np.float32)
         )
@@ -197,15 +197,15 @@ class ECoGDatast(Dataset):
                                                 'supported' % dummy_idx
         self.dummy_idx = 0 if dummy_idx.lower() == 'f' else 2
         self._xwindow = window
-        self._ywindow = int(window / x2y_ratio)
+        self._ywindow = int(window // x2y_ratio)
         self._xstride = stride
-        self._ystride = int(stride / x2y_ratio)
+        self._ystride = int(stride // x2y_ratio)
         if self.input_shape[-1] == 'c':
             self._num_samples = int((X.shape[0] - self._xwindow) / self._xstride) + 1
         else:
             self._num_samples = int((X.shape[-1] - self._xwindow) / self._xstride) + 1
         assert self._num_samples <= int((y.shape[0] - self._ywindow) / self._ystride) + 1, \
-            'number of examples X (%d) does not match number of labels y(%d)' %\
+            'number of samples (%d) does not match number of labels y(%d)' % \
             (self._num_samples, int((y.shape[0] - self._ywindow) / self._ystride) + 1)
         self._X = X
         self._y = y
@@ -216,11 +216,11 @@ class ECoGDatast(Dataset):
 
     def __getitem__(self, idx):
         if self.input_shape[-1] == 'c':
-            X = self._X[idx * self._xstride: idx * self._xstride + self._xwindow,:].squeeze().astype(np.float32)
+            X = self._X[idx * self._xstride: idx * self._xstride + self._xwindow, ].squeeze().astype(np.float32)
             X = np.expand_dims(X.T if self.time_last else X, axis=self.dummy_idx).astype(np.float32)
         else:
             X = self._X[:, idx * self._xstride: idx * self._xstride + self._xwindow].squeeze().astype(np.float32)
             X = np.expand_dims(X if self.time_last else X.T, axis=self.dummy_idx).astype(np.float32)
-        y = self._y[idx * self._ystride: idx * self._ystride + self._ywindow].squeeze().astype(np.float32)
+        y = self._y[idx * self._ystride: idx * self._ystride + self._ywindow, ].astype(np.float32)
         return X, y
 

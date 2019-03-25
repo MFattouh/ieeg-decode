@@ -9,14 +9,13 @@ from utils.experiment_util import *
 from tensorboardX import SummaryWriter
 import h5py
 from glob import glob
-from sklearn.model_selection import KFold, LeaveOneOut
+from sklearn.model_selection import KFold, LeaveOneOut, train_test_split
 import pandas as pd
 from utils.config import cfg, merge_configs
+import random
 
 CUDA = True
 EXPERIMENT_NAME = 'models'
-np.random.seed(cfg.TRAINING.RANDOM_SEED)
-torch.manual_seed(cfg.TRAINING.RANDOM_SEED)
 TASK_NAMES = ['XPOS', 'XVEL', 'ABSPOS', 'ABSVEL']
 
 logger = logging.getLogger(__name__)
@@ -28,7 +27,7 @@ logger = logging.getLogger(__name__)
 @click.argument('dataset_dir', type=click.Path(exists=True))
 @click.argument('subject', type=str)
 @click.option('--log_dir', '-l', type=click.Path(), default=os.path.curdir)
-@click.option('--n_splits', default=5, help='Number of cross-validation splits')
+@click.option('--n_splits', default=0, help='Number of cross-validation splits')
 @click.option('--task', '-t', type=click.Choice(['xpos', 'xvel', 'abspos', 'absvel', 'multi']), default='xpos',
               help='Task to decode. acceptable are:\n'
                    '* xpos for position decoding.\n'
@@ -40,6 +39,11 @@ logger = logging.getLogger(__name__)
 def main(mode, configs, dataset_dir, subject, log_dir, n_splits, task):
     with open(configs, 'r') as f:
         merge_configs(yaml.load(f))
+
+    # set the random state
+    np.random.seed(cfg.TRAINING.RANDOM_SEED)
+    torch.manual_seed(cfg.TRAINING.RANDOM_SEED)
+    random.seed(cfg.TRAINING.RANDOM_SEED)
 
     if mode == 'eval':
         train_path = os.path.join(log_dir, task.upper(), 'TRAIN', subject, cfg.TRAINING.MODEL.upper())
@@ -82,6 +86,7 @@ def main(mode, configs, dataset_dir, subject, log_dir, n_splits, task):
             rec_day_name = os.path.basename(dataset_path).split('.')[0].split('_')
             rec_names.append('_'.join([rec_day_name[1], rec_day_name[3]]))
 
+    # prepare a df to store the results
     if mode == 'cv':
         index = pd.MultiIndex.from_product([rec_names, ['fold%d' % fold for fold in range(1, n_splits+1)]],
                                            names=['day', 'fold'])
@@ -100,7 +105,7 @@ def main(mode, configs, dataset_dir, subject, log_dir, n_splits, task):
         if mode == 'cv' or mode == 'train':
             dataset_name = 'D'
         else:
-            dataset_name = 'F'
+            dataset_name = cfg.EVAL.DATASET
         if task == 'multi':
             trials, in_channels = read_multi_datasets(dataset_path, dataset_name)
             num_classes = len(dataset_path)
@@ -150,14 +155,35 @@ def main(mode, configs, dataset_dir, subject, log_dir, n_splits, task):
                 df.to_csv(os.path.join(log_dir, 'cv_acc.csv'), index=True)
 
         elif mode == 'train':
-            model, optimizer, scheduler, loss_fun, metric = create_model(in_channels, num_classes, CUDA)
 
             weights_path = os.path.join(log_dir, rec_name, 'weights.pt')
 
             training_writer = SummaryWriter(os.path.join(log_dir, rec_name, 'train'))
 
-            corr, mse = training_loop(model, optimizer, scheduler, loss_fun, metric, trials, training_writer,
-                                      weights_path=weights_path, cuda=CUDA)
+            if n_splits > 0:
+                # use a validation split
+                trials_idx = list(range(len(trials)))
+                train_split, valid_split = train_test_split(trials_idx, test_size=n_splits/100, shuffle=False,
+                                                            random_state=cfg.TRAINING.RANDOM_SEED)
+
+                logger.info('Training trials:')
+                logger.info(train_split)
+                logger.info('Validation trials:')
+                logger.info(valid_split)
+
+                training_trials = [trials[idx] for idx in train_split]
+                valid_trials = [trials[idx] for idx in valid_split]
+                valid_writer = SummaryWriter(os.path.join(log_dir, rec_name, 'valid'))
+
+            else:
+                training_trials = trials
+                valid_trials = None
+                valid_writer = None
+
+            model, optimizer, scheduler, loss_fun, metric = create_model(in_channels, num_classes, CUDA)
+
+            corr, mse = training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials, training_writer,
+                                      valid_trials, valid_writer, weights_path, CUDA)
 
             if task == 'multi':
                 for task_idx in range(len(corr)):
@@ -173,9 +199,19 @@ def main(mode, configs, dataset_dir, subject, log_dir, n_splits, task):
         else:
             model, optimizer, scheduler, loss_fun, metric = create_model(in_channels, num_classes, CUDA)
 
-            weights_path = os.path.join(train_path, rec_name, 'weights.pt')
+            weights_path = os.path.join(train_path, rec_name, 'weights_final.pt')
             assert os.path.exists(weights_path), 'No weights are detected for this recording!'
-            corr, mse = eval_model(model, loss_fun, metric, trials, weights_path, cuda=CUDA)
+            if dataset_name == 'D' and n_splits > 0:
+                trials_idx = list(range(len(trials)))
+                # eval only the valid_split
+                _, valid_split = train_test_split(trials_idx, test_size=n_splits/100, shuffle=False,
+                                                  random_state=cfg.TRAINING.RANDOM_SEED)
+                eval_trials = [trials[idx] for idx in valid_split]
+
+            else:
+                # then we evaluate the final hold-out set
+                eval_trials = trials
+            corr, mse = eval_model(model, loss_fun, metric, eval_trials, weights_path, cuda=CUDA)
 
             if task == 'multi':
                 for task_idx in range(len(corr)):
@@ -184,8 +220,11 @@ def main(mode, configs, dataset_dir, subject, log_dir, n_splits, task):
                 df.loc[rec_name, 'mse'] = mse
             else:
                 df.loc[rec_name, :] = [corr, mse]
+
             # writes every time just in case it couldn't run the complete script
             df.to_csv(os.path.join(log_dir, 'cv_acc.csv'), index=True)
+
+    print("Done!")
 
 
 if __name__ == '__main__':

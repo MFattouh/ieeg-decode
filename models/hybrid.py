@@ -9,6 +9,7 @@ from models.bnlstm import BNLSTMCell
 import numpy as np
 from models.weight_drop import WeightDrop
 from utils.config import cfg
+from itertools import zip_longest
 
 supported_rnns = {
     'lstm': nn.LSTM,
@@ -70,14 +71,8 @@ def _transpose_C_to_W():
 
 
 def _rnn_to_bn_transpose():
-    # x is expected to be TxNxH
-    return Expression(lambda x: x.permute(1, 2, 0).contiguous())  # NxHxT
-
-
-def _rnn_to_fc_transpose():
-    # x is expected to be TxNxH
-    # x = x..contiguous()
-    return Expression(lambda x: x.transpose(1, 0).contiguous())  # NxTxH
+    # x is expected to be NxTxH
+    return Expression(lambda x: x.transpose(1, 2).contiguous())  # NxHxT
 
 
 # the next two functions perform exactly the same operation. just for the sake of calrity
@@ -101,23 +96,85 @@ def _drop_last():
     return Expression(lambda x: x.squeeze(3))  # NxHxT
 
 
-def make_rnn(input_size=0, rnn_type='lstm', normalization=False, dropout=0, weights_dropout=[], max_length=0, hidden_size=10,
-             num_layers=1):
+def make_rnns(input_size=0, rnn_type='lstm', normalization=False, dropout=[], weights_dropout=[], max_length=0, hidden_size=10,
+              num_layers=1, pooling_kernels=[], pooling_strides=[]):
+    assert len(pooling_kernels) == len(pooling_strides)
+    if not pooling_kernels:
+        if dropout:
+            dropout = [dropout_prop for dropout_props in dropout for dropout_prop in dropout_props]
+        return make_rnn_layer(rnn_type, num_layers, input_size, hidden_size, max_length, dropout, weights_dropout,
+                              normalization)
+    else:
+        # TODO: move this part into RNN_BLOCK
+
+        return RNN_BLOCK(input_size, rnn_type, normalization, dropout, weights_dropout, max_length, hidden_size,
+                         num_layers, pooling_kernels, pooling_strides).cuda()
+
+
+class RNN_BLOCK(nn.Module):
+    def __init__(self, input_size=0, rnn_type='lstm', normalization=False, dropout=[], weights_dropout=[], max_length=0, hidden_size=10,
+                 num_layers=1, pooling_kernels=[], pooling_strides=[]):
+        super(RNN_BLOCK, self).__init__()
+
+        if weights_dropout:
+            assert len(weights_dropout) < 3
+            assert dropout
+
+        if len(dropout) > 1:
+            assert len(dropout) == num_layers
+
+        elif len(dropout) == 1:
+            dropout = [dropout[0]] * num_layers
+
+        rnn_layers = []
+        pooling_layers = []
+
+        for i in range(num_layers):
+            dropout_prop = dropout[i] if dropout else []
+            rnn_layers.append(
+                make_rnn_layer(rnn_type, 1, input_size, hidden_size, max_length, dropout_prop, weights_dropout,
+                               normalization))
+            # next layers will have input size of hidden size
+            input_size = hidden_size
+            if len(pooling_kernels) > i:
+                pooling_layers.append(nn.MaxPool1d(pooling_kernels[i], pooling_strides[i]))
+
+        self.rnn_layers = rnn_layers
+        self.pooling_layers = pooling_layers
+
+    def forward(self, x, hidden):
+        for rnn_layer, pooling_layer in zip_longest(self.rnn_layers, self.pooling_layers):
+            x, hidden = rnn_layer(x, hidden)
+
+            if pooling_layer is not None:
+                # before each layer we should transpose the view from NxTxC to NxCxT and back after pooling
+                x = pooling_layer(x.transpose(1, 2)).transpose(1, 2)
+
+        return x, hidden
+
+    def __repr__(self):
+        output = ''
+        for rnn_layer, pooling_layer in zip_longest(self.rnn_layers, self.pooling_layers):
+            output = output + repr(rnn_layer) + '\n'
+            if pooling_layer is not None:
+                output = output + repr(pooling_layer) + '\n'
+        return output
+
+
+def make_rnn_layer(rnn_type, num_layers, input_size, hidden_size, max_length, dropout, weights_dropout, normalization):
     assert rnn_type.lower() in supported_rnns, 'unknown recurrent type'+rnn_type
     if normalization == 'None':
-        rnns = supported_rnns[rnn_type](input_size=input_size, hidden_size=hidden_size,
+        rnns = supported_rnns[rnn_type](input_size=input_size, hidden_size=hidden_size, batch_first=True,
                                         num_layers=num_layers, bidirectional=False, bias=True)
     elif normalization == 'batch_norm':
-        assert rnn_type.lower() == 'lstm', 'Recurrent Batch Normalization is currently not supported for '+rnn_type
+        assert rnn_type.lower() == 'lstm', 'Recurrent Batch Normalization is currently not supported for ' + rnn_type
         assert max_length > 0, 'a valid max length required to with batch normalization'
-        rnns = BNLSTM(cell_class=BNLSTMCell, input_size=input_size, hidden_size=hidden_size,
+        rnns = BNLSTM(cell_class=BNLSTMCell, input_size=input_size, hidden_size=hidden_size, batch_first=True,
                       num_layers=num_layers, max_length=max_length)
     else:
         raise NotImplementedError
-
-    if dropout > 0 and weights_dropout:
+    if dropout and weights_dropout:
         rnns = WeightDrop(rnns, weights=weights_dropout, dropout=dropout)
-
     return rnns
 
 
@@ -139,8 +196,6 @@ def make_fc(input_size=0, num_classes=1, batch_norm=False, dropout=[], fc_size=[
                 fc_out.append(('dropout0', nn.Dropout2d(dropout[0])))
                 fc_out.append(('squeeze0', _drop_last()))
             fc_out.append(('trans02', _bn_to_fc_transpose()))
-        else:
-            fc_out.append(('trans0', _rnn_to_fc_transpose()))
 
         fc_out.append(('linear0', nn.Linear(input_size, fc_size[0], bias=not batch_norm)))
         if initializer is not None:
@@ -180,8 +235,6 @@ def make_fc(input_size=0, num_classes=1, batch_norm=False, dropout=[], fc_size=[
                 fc_out.append(('dropout', nn.Dropout2d(dropout[0])))
                 fc_out.append(('squeeze', _drop_last()))
             fc_out.append(('detrans', _bn_to_fc_transpose()))
-        else:
-            fc_out.append(('trans', _rnn_to_fc_transpose()))
         fc_out.append(('output', nn.Linear(input_size, num_classes, bias=not batch_norm)))
         if initializer is not None:
             initializer(fc_out[-1][1].weight)
@@ -309,7 +362,7 @@ class HybridModel(nn.Module):
             self.l2pooling = None
 
         rnns_configs = dict(zip(map(lambda k: k.lower(), cfg.HYBRID.RNN.keys()), cfg.HYBRID.RNN.values()))
-        self.rnns = make_rnn(rnn_input_size, **rnns_configs)
+        self.rnns = make_rnns(rnn_input_size, **rnns_configs)
 
         linear_configs = dict(zip(map(lambda k: k.lower(), cfg.HYBRID.LINEAR.keys()), cfg.HYBRID.LINEAR.values()))
         self.fc = make_fc(cfg.HYBRID.RNN.HIDDEN_SIZE, **linear_configs)
@@ -326,14 +379,16 @@ class HybridModel(nn.Module):
             x = self.l2pooling(x)      # NxC2xC1xT3
 
         sizes = x.size()
-        x = x.view(sizes[0], sizes[1] * sizes[2], sizes[3])  # Collapse feature dimension
-        x = x.transpose(1, 2).transpose(0, 1).contiguous()   # TxNxC
-        x, out_hidden = self.rnns(x, hidden)  # TxNxH
+        x = x.view(sizes[0], sizes[1] * sizes[2], sizes[3])  # Collapse feature dimension -> NxCxT
+
+        # TODO: change input from TxNxC to NxTxC
+        x = x.transpose(1, 2).contiguous()    # NxTxC
+        x, out_hidden = self.rnns(x, hidden)  # NxTxH
 
         if self._output_stride > 1:
-            x = x[self._output_stride-1::self._output_stride]
+            x = x[:, self._output_stride-1::self._output_stride]
 
-        x = self.fc(x)  # NxTxH
+        x = self.fc(x)  # NxTxnClasses
 
         if hidden is not None:
             return x, out_hidden  # N x T x nClasses

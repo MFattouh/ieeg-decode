@@ -7,12 +7,12 @@ logger = logging.getLogger(__name__)
 
 
 class WeightDrop(torch.nn.Module):
-    def __init__(self, module, weights, dropout=0, variational=False):
+    def __init__(self, module, weights, dropout=[], variational=False):
         super(WeightDrop, self).__init__()
         self.module = module
         self.weights = weights
-        if not issubclass(type(dropout), list):
-            self.dropout = [dropout] * len(weights)
+        if len(dropout) == 1:
+            self.dropout = dropout * len(weights)
         else:
             assert len(dropout) == len(weights)
             self.dropout = dropout

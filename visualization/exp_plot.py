@@ -20,6 +20,7 @@ def model_plot(dataset_dir, test, kind, legend, palette):
     sns.set_context("notebook", font_scale=1.5)
     sns.set_style("darkgrid")
     results = create_results_df(dataset_dir)
+    results.to_csv(os.path.join(dataset_dir, 'all_results.csv'), index=False)
     gdf = results.groupby('model')
     print('mean corr. per model:')
     print(gdf.mean())
@@ -36,14 +37,15 @@ def model_plot(dataset_dir, test, kind, legend, palette):
     if 'layer' in model_type.lower():
         order = sorted(unique_models, key=lambda model: int(model[0]))
     else:
-        order = ['HYBRID', 'SHALLOW', 'DEEP4', 'RNN']
+        #  order = ['HYBRID', 'SHALLOW', 'DEEP4', 'RNN']
+        order = ['HYBRID', 'SHALLOW', 'DEEP4', 'DEEP5_x2', 'DEEP5_x4', 'RNN']
 
     if legend:
         color, bpalette = 'gray', None
     else:
         color, bpalette = 0.3, palette
 
-    fig, ax = plt.subplots(figsize=(6, 6))
+    fig, ax = plt.subplots(figsize=(10, 6))
     if kind == 'box':
         sns.boxplot('model', 'corr', data=results, color=color, order=order, ax=ax, palette=bpalette)
     elif kind == 'violin':
@@ -64,7 +66,7 @@ def model_plot(dataset_dir, test, kind, legend, palette):
     sns.stripplot('model', 'corr', ax=ax, data=results, hue=hue, jitter=True, color=color, order=order,
                   palette=palette, linewidth=1, edgecolor='gray')
     if legend:
-        ax.legend(title='Recording', loc='center', bbox_to_anchor=(1.25, 0.5))
+        ax.legend(title='Recording', loc='center', bbox_to_anchor=(1.35, 0.5))
     ax.set_xlabel('')
     ax.set_ylabel('Corr. Coeff.')
     ax.set_ylim([0, 1.0])
