@@ -68,9 +68,9 @@ def recursive_dict(f, root=None, name='root'):
             add_dtype_name(f, name)
             dtype = f.dtype
             if (np.prod(f.shape)*f.dtype.itemsize) > 2e9:
-                print("WARNING: The array", name, "requires > 2Gb")
+                # print("WARNING: The array", name, "requires > 2Gb")
                 if f.dtype.char=='d':
-                    print("\t Recasting", dtype, "to float32")
+                    # print("\t Recasting", dtype, "to float32")
                     dtype = np.float32
                 else:
                     raise MemoryError
@@ -80,11 +80,11 @@ def recursive_dict(f, root=None, name='root'):
             try:
                 return string(f)
             except ValueError:  # it wasn't...
-                print("WARNING:", name, ":")
-                print("\t", f)
-                print("\t CONVERSION TO STRING FAILED, USING ARRAY!")
+                # print("WARNING:", name, ":")
+                # print("\t", f)
+                # print("\t CONVERSION TO STRING FAILED, USING ARRAY!")
                 tmp = np.array(f).squeeze()
-                print("\t", tmp)
+                # print("\t", tmp)
                 return tmp
             pass
         elif f.dtype.name == 'object':  # this is a 2D array of HDF5 object references or just objects
@@ -99,9 +99,9 @@ def recursive_dict(f, root=None, name='root'):
             try:
                 return np.array(container).squeeze()
             except ValueError:
-                print("WARNING:", name, ":")
-                print("\t", container)
-                print("\t CANNOT CONVERT INTO NON-OBJECT ARRAY")
+                # print("WARNING:", name, ":")
+                # print("\t", container)
+                # print("\t CANNOT CONVERT INTO NON-OBJECT ARRAY")
                 return np.array(container, dtype=np.object).squeeze()
         else:
             raise NotImplemented

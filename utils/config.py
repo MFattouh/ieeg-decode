@@ -49,6 +49,7 @@ __C.HYBRID.LINEAR.ACTIVATIONS = 'tanh'
 
 __C.TRAINING = dict()
 __C.TRAINING.MODEL = ''
+__C.TRAINING.MHA_CHANNELS_ONLY = False      # if enabled feed only motor hand/ arm channels
 __C.TRAINING.RANDOM_SEED = 10418
 __C.TRAINING.MAX_EPOCHS = 1000
 __C.TRAINING.EVAL_TRAIN_EVERY = 20

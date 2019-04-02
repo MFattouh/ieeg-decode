@@ -1,0 +1,42 @@
+HYBRID:
+  RNN:
+    RNN_TYPE: 'gru'
+    NUM_LAYERS: 3
+    HIDDEN_SIZE: 64
+    DROPOUT: [[0.3]]
+    WEIGHTS_DROPOUT: ['weight_ih_l0', 'weight_ih_l1', 'weight_ih_l2', 'weight_hh_l0', 'weight_hh_l1', 'weight_hh_l2']
+    NORMALIZATION: None
+    MAX_LENGTH: 0  # maximum sequence length (required for BNLSTM)
+
+  # L2POOLING
+  L2POOLING:
+    ENABLED: False
+
+  LINEAR:
+    BATCH_NORM: False
+    DROPOUT: [0.5, 0.3]
+    FC_SIZE: [32, 10]
+    ACTIVATIONS: 'tanh'
+
+TRAINING:
+  MODEL: 'RNN'
+  MHA_CHANNELS_ONLY: True
+  MAX_EPOCHS: 500
+  EVAL_TRAIN_EVERY: 1
+  EVAL_VALID_EVERY: 500
+  BATCH_SIZE: 1
+  DUMMY_IDX: 'f'
+  OUTPUT_SEQ_LEN: 3319
+  RANDOM_SEED: 10418
+  WEIGHT_STATS: True
+
+EVAL:
+  SAVE_PREDICTIONS: True
+  DATASET: 'D'
+  INPUT_STRIDE: 100
+
+OPTIMIZATION:
+  OPTIMIZER: 'adam'
+  BASE_LR: 5e-3
+  WEIGHT_DECAY: 5e-6
+  SCHEDULER: 'cos'

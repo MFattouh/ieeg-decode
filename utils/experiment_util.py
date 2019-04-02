@@ -17,13 +17,50 @@ from torch import optim
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import torch.nn as nn
 from resampy import resample
+from utils.mat73_to_pickle import recursive_dict
 
 logger = logging.getLogger('__name__')
 
 
-def read_dataset(dataset_path, dataset_name):
+def read_dataset(dataset_path, dataset_name, mha_only):
     datasets_list = []
+
     with h5py.File(dataset_path, 'r') as hf:
+        if mha_only:
+            # # first remove the non-valid channels
+            header = recursive_dict(hf['H/channels'])
+            header_keys = dict([(key.lower().replace('_', '').replace('-', ''), key) for key in header.keys()])
+            signal_type = [stype.replace('_', '').replace('-', '').lower() for stype in header[header_keys['signaltype']].tolist()]
+            ecog_grid_channels_idx = [stype.find('ecoggrid') != -1 for stype in signal_type]
+            ecog_strip_channels_idx = [stype.find('ecogstrip') != -1 for stype in signal_type]
+            seeg_channels_idx = [stype.find('seeg') != -1 for stype in signal_type]
+            ieeg_idx = np.bitwise_or(np.bitwise_or(ecog_grid_channels_idx, ecog_strip_channels_idx), seeg_channels_idx)
+            if np.all(ieeg_idx == False):
+                raise KeyError('No ECoG-Grid, ECoG-Strip or SEEG were electrods found!')
+            if 'seizureonset' in header_keys:
+                soz = header[header_keys['seizureonset']]
+            else:
+                soz = np.zeros((ieeg_idx.shape[-1], 1)).squeeze()
+            valid_channels = soz == 0
+            if 'rejected' in header_keys:
+                rejected = header[header_keys['rejected']]
+                not_rejected = np.array([np.all(rejected[idx] == 0) for idx in range(len(rejected))])
+                valid_channels = np.bitwise_and(valid_channels, not_rejected)
+
+            if 'interictaloften' in header_keys:
+                rejected = header[header_keys['interictaloften']]
+                not_rejected = np.array([np.all(rejected[idx] == 0) for idx in range(len(rejected))])
+                valid_channels = np.bitwise_and(valid_channels, not_rejected)
+
+            valid_channels = np.bitwise_and(ieeg_idx, valid_channels)
+            num_valid_channels = np.count_nonzero(valid_channels)
+            valid_channels_idx = [i for i, x in enumerate(valid_channels) if x]
+
+            esm = header[header_keys['esm']]
+            mha_channels = list(map(lambda x: 'arm motor' in x or 'hand motor' in x,
+                                    [esm[i] for i in valid_channels_idx]))
+            mha_channels_idx = [i for i, x in enumerate(mha_channels) if x]
+
         trials = [hf[obj_ref] for obj_ref in hf[dataset_name][0]]
         for idx, trial in enumerate(trials, 1):
             if trial['ieeg'].ndim != 2:
@@ -35,9 +72,13 @@ def read_dataset(dataset_path, dataset_name):
             X = trial['ieeg'][:]
             y = trial['traj'][:][:].T
 
+            if mha_only:
+                assert X.shape[0] == num_valid_channels
+                X = X[mha_channels_idx, :]
+
             # resample if necessary
             srate = int(trial['srate'][:][:])
-            # TODO: HANDCODED axis
+            # TODO: HARDCODED axis
             if srate > cfg.TRAINING.INPUT_SAMPLING_RATE:
                 X = resample(X, srate, cfg.TRAINING.INPUT_SAMPLING_RATE, axis=1)
             else:
@@ -57,21 +98,14 @@ def read_dataset(dataset_path, dataset_name):
                 logger.warning('Trial {} is too short. Only {} samples found!'.foramt(X.shape, idx))
                 continue
 
-            # TODO: HANDCODED axis
-            in_channels = X.shape[0]
-            if idx == 1:
-                in_channels = X.shape[0]
-            else:
-                assert in_channels == X.shape[0],\
-                    'different channels in different trials {} != {}'.format(in_channels, X.shape[0])
-
+            # TODO: HARDCODED axis
             datasets_list.append((X, y))
 
-    return datasets_list, in_channels
+    return datasets_list, X.shape[0]
 
 
-def read_multi_datasets(input_datasets_path, dataset_name):
-    datasets_list, in_channels = read_dataset(input_datasets_path[0], dataset_name)
+def read_multi_datasets(input_datasets_path, dataset_name, mha_only):
+    datasets_list, in_channels = read_dataset(input_datasets_path[0], dataset_name, mha_only)
 
     # TODO: if read_dataset ignores some trials we have no clue which!
     for dataset_path in input_datasets_path[1:]:
