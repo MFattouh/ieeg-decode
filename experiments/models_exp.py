@@ -107,13 +107,17 @@ def main(mode, configs, dataset_dir, subject, log_dir, n_splits, task):
         else:
             dataset_name = cfg.EVAL.DATASET
         if task == 'multi':
-            trials, in_channels = read_multi_datasets(dataset_path, dataset_name)
+            trials, in_channels = read_multi_datasets(dataset_path, dataset_name, mha_only=cfg.TRAINING.MHA_CHANNELS_ONLY)
             num_classes = len(dataset_path)
         else:
-            trials, in_channels = read_dataset(dataset_path, dataset_name)
+            trials, in_channels = read_dataset(dataset_path, dataset_name, mha_only=cfg.TRAINING.MHA_CHANNELS_ONLY)
             num_classes = 1
         logger.info(f'{len(trials)} trials found')
         logger.info(f'Number of input input channels: {in_channels}')
+        if in_channels < 1:
+            logger.warning(f'Zero valid channels found!!!!!!')
+            print(f'Zero valid channels found!!!!!!')
+            return
 
         if mode == 'cv':
             crop_idx = list(range((len(trials))))
