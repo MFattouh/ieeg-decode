@@ -35,7 +35,7 @@ def read_dataset(dataset_path, dataset_name, mha_only):
             ecog_strip_channels_idx = [stype.find('ecogstrip') != -1 for stype in signal_type]
             seeg_channels_idx = [stype.find('seeg') != -1 for stype in signal_type]
             ieeg_idx = np.bitwise_or(np.bitwise_or(ecog_grid_channels_idx, ecog_strip_channels_idx), seeg_channels_idx)
-            if np.all(ieeg_idx == False):
+            if np.all(ieeg_idx==False):
                 raise KeyError('No ECoG-Grid, ECoG-Strip or SEEG were electrods found!')
             if 'seizureonset' in header_keys:
                 soz = header[header_keys['seizureonset']]
@@ -64,8 +64,8 @@ def read_dataset(dataset_path, dataset_name, mha_only):
         trials = [hf[obj_ref] for obj_ref in hf[dataset_name][0]]
         for idx, trial in enumerate(trials, 1):
             if trial['ieeg'].ndim != 2:
-                logger.warning('irregular trial shape {} encountered in trial {}. '
-                               'Expected 2D array! This trial will be discarded'.format(X.shape, idx))
+                logger.warning('Irregular trial shape {} encountered in trial {}. '
+                               'Expected 2D array! This trial will be discarded'.format(trial['ieeg'].shape, idx))
                 continue
 
             # read data
