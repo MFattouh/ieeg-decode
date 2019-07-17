@@ -29,33 +29,10 @@ def read_dataset(dataset_path, dataset_name, mha_only):
         if mha_only:
             # # first remove the non-valid channels
             header = recursive_dict(hf['H/channels'])
+            valid_channels_idx = extract_valid_channels(header)
+            num_valid_channels = len(valid_channels_idx)
+
             header_keys = dict([(key.lower().replace('_', '').replace('-', ''), key) for key in header.keys()])
-            signal_type = [stype.replace('_', '').replace('-', '').lower() for stype in header[header_keys['signaltype']].tolist()]
-            ecog_grid_channels_idx = [stype.find('ecoggrid') != -1 for stype in signal_type]
-            ecog_strip_channels_idx = [stype.find('ecogstrip') != -1 for stype in signal_type]
-            seeg_channels_idx = [stype.find('seeg') != -1 for stype in signal_type]
-            ieeg_idx = np.bitwise_or(np.bitwise_or(ecog_grid_channels_idx, ecog_strip_channels_idx), seeg_channels_idx)
-            if np.all(ieeg_idx==False):
-                raise KeyError('No ECoG-Grid, ECoG-Strip or SEEG were electrods found!')
-            if 'seizureonset' in header_keys:
-                soz = header[header_keys['seizureonset']]
-            else:
-                soz = np.zeros((ieeg_idx.shape[-1], 1)).squeeze()
-            valid_channels = soz == 0
-            if 'rejected' in header_keys:
-                rejected = header[header_keys['rejected']]
-                not_rejected = np.array([np.all(rejected[idx] == 0) for idx in range(len(rejected))])
-                valid_channels = np.bitwise_and(valid_channels, not_rejected)
-
-            if 'interictaloften' in header_keys:
-                rejected = header[header_keys['interictaloften']]
-                not_rejected = np.array([np.all(rejected[idx] == 0) for idx in range(len(rejected))])
-                valid_channels = np.bitwise_and(valid_channels, not_rejected)
-
-            valid_channels = np.bitwise_and(ieeg_idx, valid_channels)
-            num_valid_channels = np.count_nonzero(valid_channels)
-            valid_channels_idx = [i for i, x in enumerate(valid_channels) if x]
-
             esm = header[header_keys['esm']]
             mha_channels = list(map(lambda x: 'arm motor' in x or 'hand motor' in x,
                                     [esm[i] for i in valid_channels_idx]))
@@ -103,6 +80,33 @@ def read_dataset(dataset_path, dataset_name, mha_only):
 
     return datasets_list, X.shape[0]
 
+def extract_valid_channels(header):
+    header_keys = dict([(key.lower().replace('_', '').replace('-', ''), key) for key in header.keys()])
+    signal_type = [stype.replace('_', '').replace('-', '').lower() for stype in header[header_keys['signaltype']].tolist()]
+    ecog_grid_channels_idx = [stype.find('ecoggrid') != -1 for stype in signal_type]
+    ecog_strip_channels_idx = [stype.find('ecogstrip') != -1 for stype in signal_type]
+    seeg_channels_idx = [stype.find('seeg') != -1 for stype in signal_type]
+    ieeg_idx = np.bitwise_or(np.bitwise_or(ecog_grid_channels_idx, ecog_strip_channels_idx), seeg_channels_idx)
+    if np.all(ieeg_idx==False):
+        raise KeyError('No ECoG-Grid, ECoG-Strip or SEEG were electrods found!')
+    if 'seizureonset' in header_keys:
+        soz = header[header_keys['seizureonset']]
+    else:
+        soz = np.zeros((ieeg_idx.shape[-1], 1)).squeeze()
+    valid_channels = soz == 0
+    if 'rejected' in header_keys:
+        rejected = header[header_keys['rejected']]
+        not_rejected = np.array([np.all(rejected[idx] == 0) for idx in range(len(rejected))])
+        valid_channels = np.bitwise_and(valid_channels, not_rejected)
+
+    if 'interictaloften' in header_keys:
+        rejected = header[header_keys['interictaloften']]
+        not_rejected = np.array([np.all(rejected[idx] == 0) for idx in range(len(rejected))])
+        valid_channels = np.bitwise_and(valid_channels, not_rejected)
+
+    valid_channels = np.bitwise_and(ieeg_idx, valid_channels)
+    valid_channels_idx = [i for i, x in enumerate(valid_channels) if x]
+    return valid_channels_idx 
 
 def read_multi_datasets(input_datasets_path, dataset_name, mha_only):
     datasets_list, in_channels = read_dataset(input_datasets_path[0], dataset_name, mha_only)
@@ -170,7 +174,7 @@ def lr_finder(model, loss_fun, optimizer, training_trials, output_path, min_lr=-
 
 def create_eval_loader(trials):
     valid_dataset = ConcatDataset(
-        [ECoGDatast(X, y, window=cfg.TRAINING.CROP_LEN, stride=cfg.EVAL.INPUT_STRIDE,
+        [ECoGDataset(X, y, window=cfg.TRAINING.CROP_LEN, stride=cfg.EVAL.INPUT_STRIDE,
                     x2y_ratio=cfg.TRAINING.INPUT_SAMPLING_RATE / cfg.TRAINING.OUTPUT_SAMPLING_RATE,
                     input_shape='ct', dummy_idx=cfg.TRAINING.DUMMY_IDX) for (X, y) in trials])
 
@@ -181,7 +185,7 @@ def create_eval_loader(trials):
 
 def create_training_loader(trials):
     training_dataset = ConcatDataset(
-        [ECoGDatast(X, y, window=cfg.TRAINING.CROP_LEN, stride=cfg.TRAINING.INPUT_STRIDE,
+        [ECoGDataset(X, y, window=cfg.TRAINING.CROP_LEN, stride=cfg.TRAINING.INPUT_STRIDE,
                     x2y_ratio=cfg.TRAINING.INPUT_SAMPLING_RATE / cfg.TRAINING.OUTPUT_SAMPLING_RATE,
                     input_shape='ct', dummy_idx=cfg.TRAINING.DUMMY_IDX) for (X, y) in trials])
 
@@ -214,21 +218,31 @@ def create_model(in_channels, num_classes, cuda=True):
     if cfg.TRAINING.MODEL.lower() == 'rnn':
         model = HybridModel(in_channels=in_channels, output_stride=int(cfg.HYBRID.OUTPUT_STRIDE))
 
-        if cfg.HYBRID.OUTPUT_STRIDE > 1:
-            loss_fun = mse_loss
-            metric = CorrCoeff().corrcoeff
-        else:
-            weights = make_weights(cfg.TRAINING.CROP_LEN, num_relaxed_samples, dtype='step')
-            weights_tensor = torch.from_numpy(weights)
-            if cuda:
-                weights_tensor = weights_tensor.cuda()
-            loss_fun = WeightedMSE(weights_tensor)
-            metric = CorrCoeff(weights).weighted_corrcoef
+        # if cfg.HYBRID.OUTPUT_STRIDE > 1:
+        #     loss_fun = mse_loss
+        #     metric = CorrCoeff().corrcoeff
+        # else:
+        #     weights = make_weights(cfg.TRAINING.CROP_LEN, num_relaxed_samples, dtype='step')
+        #     weights_tensor = torch.from_numpy(weights)
+        #     if cuda:
+        #         weights_tensor = weights_tensor.cuda()
+        #     loss_fun = WeightedMSE(weights_tensor)
+        #     metric = CorrCoeff(weights).weighted_corrcoef
 
-    elif cfg.TRAINING.MODEL.lower() == 'deep4':
-        #  pool_time_length=3
-        #  pool_time_stride=3
+    
+    elif 'deep4' in cfg.TRAINING.MODEL.lower():
+        if 'wide' in cfg.TRAINING.MODEL.lower():
+            pool_length=4
+            pool_stride=4
+        elif 'narrow' in cfg.TRAINING.MODEL.lower():
+            pool_length=2
+            pool_stride=2
+        else:
+            pool_length=3
+            pool_stride=3
+            
         model = Deep4Net(in_chans=in_channels, n_classes=num_classes, input_time_length=cfg.TRAINING.CROP_LEN,
+                         pool_time_length=pool_length, pool_time_stride=pool_stride,
                          final_conv_length=2, stride_before_pool=True).create_network()
 
         # remove softmax

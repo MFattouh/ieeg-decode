@@ -174,7 +174,7 @@ class BalancedBatchSampler(Sampler):
         return len(self.batch_sizes)
 
 
-class ECoGDatast(Dataset):
+class ECoGDataset(Dataset):
     def __init__(self, X, y, window=1, stride=1, x2y_ratio=1, input_shape='tc', time_last=True, dummy_idx='f'):
         """
         :param X:

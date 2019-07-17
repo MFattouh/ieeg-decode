@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 
 
 @click.command(name='models-experiments')
-@click.argument('configs', type=click.Path(), default=os.path.curdir)
 @click.argument('mode', type=click.Choice(['train', 'eval', 'cv']), default='train')
+@click.argument('configs', type=click.Path(), default=os.path.curdir)
 @click.argument('dataset_dir', type=click.Path(exists=True))
 @click.argument('subject', type=str)
 @click.option('--log_dir', '-l', type=click.Path(), default=os.path.curdir)

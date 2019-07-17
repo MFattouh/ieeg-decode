@@ -105,8 +105,6 @@ def make_rnns(input_size=0, rnn_type='lstm', normalization=False, dropout=[], we
         return make_rnn_layer(rnn_type, num_layers, input_size, hidden_size, max_length, dropout, weights_dropout,
                               normalization)
     else:
-        # TODO: move this part into RNN_BLOCK
-
         return RNN_BLOCK(input_size, rnn_type, normalization, dropout, weights_dropout, max_length, hidden_size,
                          num_layers, pooling_kernels, pooling_strides).cuda()
 
