@@ -19,6 +19,12 @@ STAT = 'mean'
 
 stat_fn = np.mean if 'mean' in STAT else np.median
 
+def eval_dropouts(mod):
+        module_name =  mod.__class__.__name__
+        if 'Dropout' in module_name or 'BatchNorm' in module_name: mod.training = False
+        for module in mod.children(): eval_dropouts(module)
+
+
 @click.command(name='connectivity-analysis')
 @click.argument('command', type=click.Choice(['io_conn', 'freq_conn', 'pert_conn', 'spectrogram']))
 @click.argument('configs', type=click.Path(), default=os.path.curdir)
@@ -82,6 +88,11 @@ def main(command, configs, dataset_dir, subject, log_dir, task):
             model.cuda()
 
         model.load_state_dict(torch.load(weights_path))
+        # TODO: check if the weights are loaded properly. check the corr of validation set for example.
+
+        # cudnn RNN backward can only be called in training mode 
+        model.train()
+        eval_dropouts(model)
 
         # mean_autocorr_x = np.zeros(cfg.TRAINING.CROP_LEN, dtype=np.float32)
         # mean_autocorr_y = np.zeros(cfg.TRAINING.CROP_LEN, dtype=np.float32)

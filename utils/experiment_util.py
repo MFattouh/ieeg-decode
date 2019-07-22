@@ -344,6 +344,8 @@ def create_model(in_channels, num_classes, cuda=True):
     if cuda:
         model.cuda()
 
+    model.eval()
+    
     metric = lambda targets, predictions: np.corrcoef(targets, predictions)[0, 1]
     loss_fun = mse_loss
     logger.info(model)
