@@ -4,7 +4,7 @@ HYBRID:
     NUM_LAYERS: 4
     HIDDEN_SIZE: 64
     DROPOUT: [[0.3]]
-    WEIGHTS_DROPOUT: ['weight_ih_l0', 'weight_ih_l1', 'weight_ih_l2', 'weight_hh_l0', 'weight_hh_l1', 'weight_hh_l2' ]
+    WEIGHTS_DROPOUT: ['weight_ih_l0', 'weight_ih_l1', 'weight_ih_l2', 'weight_ih_l3', 'weight_hh_l0', 'weight_hh_l1', 'weight_hh_l2', 'weight_hh_l3' ]
     NORMALIZATION: None
     MAX_LENGTH: 0  # maximum sequence length (required for BNLSTM)
 

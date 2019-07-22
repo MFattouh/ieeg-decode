@@ -28,12 +28,14 @@ logger = logging.getLogger(__name__)
 @click.argument('subject', type=str)
 @click.option('--log_dir', '-l', type=click.Path(), default=os.path.curdir)
 @click.option('--n_splits', default=0, help='Number of cross-validation splits')
-@click.option('--task', '-t', type=click.Choice(['xpos', 'xvel', 'abspos', 'absvel', 'multi']), default='xpos',
+@click.option('--task', '-t', type=click.Choice(['xpos', 'xvel', 'abspos', 'absvel', 'xacc', 'absacc', 'multi']), default='xpos',
               help='Task to decode. acceptable are:\n'
                    '* xpos for position decoding.\n'
                    '* xvel for velocity decoding.\n'
                    '* abspos for absolute position decoding.\n'
                    '* absvel for absolute velocity decoding.\n'
+                   '* xacc for acceleration decoding.\n'
+                   '* absacc for absolute acceleration decoding.\n'
                    '* multi for multi-task decoding.\n'
                    'default is pos')
 def main(mode, configs, dataset_dir, subject, log_dir, n_splits, task):
@@ -66,6 +68,10 @@ def main(mode, configs, dataset_dir, subject, log_dir, n_splits, task):
         datasets = glob(dataset_dir + '*' + subject+'_*_absPos.mat')
     elif task == 'absvel':
         datasets = glob(dataset_dir + '*' + subject+'_*_absVel.mat')
+    elif task == 'xacc':
+        datasets = glob(dataset_dir + 'ALL_*' + subject+'_*_xacc.mat')
+    elif task == 'absacc':
+        datasets = glob(dataset_dir + '*' + subject+'_*_absAcc.mat')
     elif task == 'multi':
         pos_datasets = glob(dataset_dir + '*' + subject+'_*_xpos.mat')
         for pos_dataset in pos_datasets:

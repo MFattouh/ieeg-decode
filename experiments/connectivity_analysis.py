@@ -2,12 +2,14 @@ import os
 import yaml
 import click
 os.sys.path.insert(0, '..')
-from utils.experiment_util import *
+from utils.experiment_util import read_dataset, create_model, create_eval_loader, evaluate_one_epoch
 from glob import glob
 from utils.config import cfg, merge_configs
 import random
 from braindecode.visualization.perturbation import amp_perturbation_additive
 from braindecode.util import corr
+import numpy as np
+import torch
 import torch as th
 
 CUDA = True
@@ -23,12 +25,14 @@ stat_fn = np.mean if 'mean' in STAT else np.median
 @click.argument('dataset_dir', type=click.Path(exists=True))
 @click.argument('subject', type=str)
 @click.option('--log_dir', '-l', type=click.Path(), default=os.path.curdir)
-@click.option('--task', '-t', type=click.Choice(['xpos', 'xvel', 'abspos', 'absvel', 'multi']), default='xpos',
+@click.option('--task', '-t', type=click.Choice(['xpos', 'xvel', 'abspos', 'absvel', 'xacc', 'absacc']), default='xpos',
               help='Task to decode. acceptable are:\n'
                    '* xpos for position decoding.\n'
                    '* xvel for velocity decoding.\n'
                    '* abspos for absolute position decoding.\n'
                    '* absvel for absolute velocity decoding.\n'
+                   '* xacc for acceleration decoding.\n'
+                   '* absacc for absolute acceleration decoding.\n'
                    'default is pos')
 def main(command, configs, dataset_dir, subject, log_dir, task):
     with open(configs, 'r') as f:
@@ -53,6 +57,10 @@ def main(command, configs, dataset_dir, subject, log_dir, task):
         datasets = glob(dataset_dir + '*' + subject+'_*_absPos.mat')
     elif task == 'absvel':
         datasets = glob(dataset_dir + '*' + subject+'_*_absVel.mat')
+    elif task == 'xacc':
+        datasets = glob(dataset_dir + 'ALL_*' + subject+'_*_xacc.mat')
+    elif task == 'absacc':
+        datasets = glob(dataset_dir + '*' + subject+'_*_absAcc.mat')
     else:
         raise KeyError
 

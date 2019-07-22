@@ -20,19 +20,20 @@ TASK_NAMES = ['XPOS', 'XVEL', 'ABSPOS', 'ABSVEL']
 logger = logging.getLogger(__name__)
 
 @click.command()
-@click.argument('configs', type=click.Path(), default=os.path.curdir)
+@click.argument('configs', type=click.Path())
 @click.argument('dataset_dir', type=click.Path(exists=True))
 @click.argument('subject', type=str)
 @click.argument('log_dir', type=click.Path())
 @click.argument('num_layers', type=int)
 @click.option('--n_splits', default=5, help='Number of cross-validation splits')
-@click.option('--task', '-t', type=click.Choice(['xpos', 'xvel', 'abspos', 'absvel', 'multi']), default='xpos',
+@click.option('--task', '-t', type=click.Choice(['xpos', 'xvel', 'abspos', 'absvel', 'xacc', 'absacc']), default='xpos',
               help='Task to decode. acceptable are:\n'
                    '* xpos for position decoding.\n'
                    '* xvel for velocity decoding.\n'
                    '* abspos for absolute position decoding.\n'
                    '* absvel for absolute velocity decoding.\n'
-                   '* multi for multi-task decoding.\n'
+                   '* xacc for acceleration decoding.\n'
+                   '* absacc for absolute acceleration decoding.\n'
                    'default is pos')
 def main(configs, dataset_dir, subject, log_dir, num_layers, n_splits, task):
     with open(configs, 'r') as f:
@@ -66,13 +67,10 @@ def main(configs, dataset_dir, subject, log_dir, num_layers, n_splits, task):
         datasets = glob(dataset_dir + '*' + subject+'_*_absPos.mat')
     elif task == 'absvel':
         datasets = glob(dataset_dir + '*' + subject+'_*_absVel.mat')
-    elif task == 'multi':
-        pos_datasets = glob(dataset_dir + '*' + subject+'_*_xpos.mat')
-        for pos_dataset in pos_datasets:
-            recording_day = pos_dataset.rstrip('_xpos.mat')
-            vel_dataset = recording_day + '_xvel.mat'
-            assert os.path.exists(vel_dataset), 'could not find enough files for multi-task decoding'
-            datasets.append((pos_dataset, vel_dataset))
+    elif task == 'xacc':
+        datasets = glob(dataset_dir + 'ALL_*' + subject+'_*_xacc.mat')
+    elif task == 'absacc':
+        datasets = glob(dataset_dir + '*' + subject+'_*_absAcc.mat')
     else:
         raise KeyError
     assert len(datasets) > 0, 'no datasets for subject %s found!' % subject
