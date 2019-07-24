@@ -1,5 +1,6 @@
 import logging
 import os
+import os.path as osp
 import datetime
 from torch.utils.data import DataLoader, ConcatDataset
 import torch.multiprocessing
@@ -73,7 +74,7 @@ def read_dataset(dataset_path, dataset_name, mha_only):
 
             # ignore trials if there isn't enough input for one crop
             if X.shape[1] < cfg.TRAINING.CROP_LEN:
-                logger.warning('Trial {} is too short. Only {} samples found!'.foramt(X.shape, idx))
+                logger.warning('Trial {} is too short. Only {} samples found!'.format(X.shape, idx))
                 continue
 
             # TODO: HARDCODED axis
@@ -170,7 +171,7 @@ def lr_finder(model, loss_fun, optimizer, training_trials, output_path, min_lr=-
             losses.append(loss.item())
 
     np_values = np.vstack((lr_values, losses)).T
-    np.savetxt(os.path.join(output_path, 'lr_finder.csv'), np_values, delimiter=',')
+    np.savetxt(osp.join(output_path, 'lr_finder.csv'), np_values, delimiter=',')
 
 
 def create_eval_loader(trials):
@@ -424,6 +425,7 @@ def train_one_epoch(model, data_loader, optimizer, loss_fun, keep_state=False, c
         # detach to stop back-propagation to older state
         if cfg.TRAINING.MODEL.lower() in ('hybrid', 'rnn') and keep_state:
             if model.rnn_type == 'lstm':
+                # FIXME: hidden should be initialized
                 for h in hidden:
                     h.detach_()
             else:
@@ -444,21 +446,21 @@ def train_one_epoch(model, data_loader, optimizer, loss_fun, keep_state=False, c
 
 def eval_model(model, loss_fun, metric, valid_trials, weights_path, cuda):
     valid_loader = create_eval_loader(valid_trials)
-    assert os.path.exists(weights_path), 'weights_path does not exists'
+    assert osp.exists(weights_path), 'weights_path does not exists'
     model.load_state_dict(torch.load(weights_path))
     valid_loss, valid_corr, targets, preds = evaluate_one_epoch(model, valid_loader, loss_fun, metric, keep_state=False, cuda=cuda)
 
     if cfg.EVAL.SAVE_PREDICTIONS:
-        preds_dir = os.path.join(os.path.dirname(weights_path.replace('TRAIN', 'EVAL')), 'predictions')
-        if not os.path.exists(preds_dir):
+        preds_dir = osp.join(osp.dirname(weights_path.replace('TRAIN', 'EVAL')), 'predictions')
+        if not osp.exists(preds_dir):
             os.makedirs(preds_dir)
-        np.savetxt(os.path.join(preds_dir, 'predictions.csv'), preds, delimiter=',')
-        np.savetxt(os.path.join(preds_dir, 'targets.csv'), targets, delimiter=',')
+        np.savetxt(osp.join(preds_dir, 'predictions.csv'), preds, delimiter=',')
+        np.savetxt(osp.join(preds_dir, 'targets.csv'), targets, delimiter=',')
     return valid_corr, valid_loss
 
 
 def training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials, training_writer,
-                  valid_trials=[], valid_writer=None, weights_path=None, cuda=True):
+                  valid_trials=[], valid_writer=None, weights_dir=None, cuda=True):
     training_loader = create_training_loader(training_trials)
     logger.info(f'Number of training mini-batches: {len(training_loader)}')
     training_eval_loader = create_training_loader(training_trials)
@@ -468,15 +470,12 @@ def training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials
         logger.info(f'Number of validation mini-batches: {len(valid_loader)}')
 
     if cfg.EVAL.SAVE_PREDICTIONS:
-        assert weights_path, 'weights_path is required with SAVE PREDICTIONS'
-        preds_dir = os.path.join(os.path.dirname(weights_path), 'predictions')
-        if not os.path.exists(preds_dir):
+        preds_dir = osp.join(osp.dirname(weights_dir), 'predictions')
+        if not osp.exists(preds_dir):
             os.makedirs(preds_dir)
 
-    weights_dir, ext = os.path.splitext(weights_path)
-    if os.path.exists(weights_path):
-        model.load_state_dict(torch.load(weights_path))
-        weights_path = weights_dir + '_best' + ext
+    final_weights_path = osp.join(weights_dir + 'weights_final.pt')
+    best_weights_path = osp.join(weights_dir + 'weights_best.pt')
 
     min_loss = float('inf')
     for epoch in range(cfg.TRAINING.MAX_EPOCHS+1):
@@ -495,8 +494,8 @@ def training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials
                 valid_loss, valid_corr, targets, preds = evaluate_one_epoch(model, valid_loader, loss_fun, metric, keep_state=False,
                                                                    writer=valid_writer, epoch=epoch, cuda=cuda)
                 if cfg.EVAL.SAVE_PREDICTIONS:
-                    np.savetxt(os.path.join(preds_dir, f'preds_{epoch}.csv'), preds, delimiter=',')
-                    np.savetxt(os.path.join(preds_dir, f'targets_{epoch}.csv'), targets, delimiter=',')
+                    np.savetxt(osp.join(preds_dir, f'preds_{epoch}.csv'), preds, delimiter=',')
+                    np.savetxt(osp.join(preds_dir, f'targets_{epoch}.csv'), targets, delimiter=',')
                 logger.info(f'init. valid loss: {valid_loss}')
                 logger.info(f'init. valid corr: {valid_corr}')
 
@@ -539,8 +538,8 @@ def training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials
             train_loss, train_corr, targets, preds = evaluate_one_epoch(model, training_eval_loader, loss_fun, metric, keep_state=False,
                                                                writer=training_writer, epoch=epoch, cuda=cuda)
             if cfg.EVAL.SAVE_PREDICTIONS:
-                np.savetxt(os.path.join(preds_dir, f'training_preds{epoch}.csv'), preds, delimiter=',')
-                np.savetxt(os.path.join(preds_dir, f'training_targets{epoch}.csv'), targets, delimiter=',')
+                np.savetxt(osp.join(preds_dir, f'training_preds{epoch}.csv'), preds, delimiter=',')
+                np.savetxt(osp.join(preds_dir, f'training_targets{epoch}.csv'), targets, delimiter=',')
             logger.info(f'training loss: {train_loss}')
             logger.info(f'training corr: {train_corr}')
 
@@ -563,8 +562,8 @@ def training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials
             valid_loss, valid_corr, targets, preds = evaluate_one_epoch(model, valid_loader, loss_fun, metric, keep_state=False,
                                                                         writer=valid_writer, epoch=epoch, cuda=cuda)
             if cfg.EVAL.SAVE_PREDICTIONS:
-                np.savetxt(os.path.join(preds_dir, f'valid_preds{epoch}.csv'), preds, delimiter=',')
-                np.savetxt(os.path.join(preds_dir, f'valid_targets{epoch}.csv'), targets, delimiter=',')
+                np.savetxt(osp.join(preds_dir, f'valid_preds{epoch}.csv'), preds, delimiter=',')
+                np.savetxt(osp.join(preds_dir, f'valid_targets{epoch}.csv'), targets, delimiter=',')
 
             logger.info(f'valid loss: {valid_loss}')
             logger.info(f'valid corr: {valid_corr}')
@@ -572,7 +571,7 @@ def training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials
             if valid_loss < min_loss:
                 logger.info(f'found new valid loss: {valid_loss}')
                 # save model parameters
-                torch.save(model.state_dict(), weights_path)
+                torch.save(model.state_dict(), best_weights_path)
                 min_loss = valid_loss
                 last_best = epoch
 
@@ -594,7 +593,7 @@ def training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials
                 logger.error('Training stalled')
                 break
 
-    torch.save(model.state_dict(), weights_dir + '_final' + ext)
+    torch.save(model.state_dict(), final_weights_path)
 
     # report best values
     logger.info(f'Best loss value: {min_loss}')

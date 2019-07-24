@@ -1,28 +1,31 @@
 import os
-import yaml
-import click
-os.sys.path.insert(0, '..')
-from utils.experiment_util import read_dataset, create_model, create_eval_loader, evaluate_one_epoch
-from glob import glob
-from utils.config import cfg, merge_configs
 import random
 from braindecode.visualization.perturbation import amp_perturbation_additive
 from braindecode.util import corr
+import click
 import numpy as np
-import torch
 import torch as th
+os.sys.path.insert(0, '..')
+import yaml
+from glob import glob
+from utils.config import cfg, merge_configs
+from utils.experiment_util import read_dataset, create_model, create_eval_loader, evaluate_one_epoch
+
 
 CUDA = True
+
 
 STAT = 'mean'
 # STAT = 'median'
 
+
 stat_fn = np.mean if 'mean' in STAT else np.median
 
+
 def eval_dropouts(mod):
-        module_name =  mod.__class__.__name__
-        if 'Dropout' in module_name or 'BatchNorm' in module_name: mod.training = False
-        for module in mod.children(): eval_dropouts(module)
+    module_name =  mod.__class__.__name__
+    if 'Dropout' in module_name or 'BatchNorm' in module_name: mod.training = False
+    for module in mod.children(): eval_dropouts(module)
 
 
 @click.command(name='connectivity-analysis')
@@ -47,7 +50,7 @@ def main(command, configs, dataset_dir, subject, log_dir, task):
     # FIXME: PERTURBATION based connectivity analysis is buggy at the moment 
     # set the random state
     np.random.seed(cfg.TRAINING.RANDOM_SEED)
-    torch.manual_seed(cfg.TRAINING.RANDOM_SEED)
+    th.manual_seed(cfg.TRAINING.RANDOM_SEED)
     random.seed(cfg.TRAINING.RANDOM_SEED)
 
     train_path = os.path.join(log_dir, task.upper(), 'TRAIN', subject, cfg.TRAINING.MODEL.upper())
@@ -87,7 +90,7 @@ def main(command, configs, dataset_dir, subject, log_dir, task):
         if CUDA:
             model.cuda()
 
-        model.load_state_dict(torch.load(weights_path))
+        model.load_state_dict(th.load(weights_path))
         # TODO: check if the weights are loaded properly. check the corr of validation set for example.
 
         # cudnn RNN backward can only be called in training mode 
@@ -117,7 +120,7 @@ def main(command, configs, dataset_dir, subject, log_dir, task):
 #             overlap = 125
             overlap = 245
             unique = window_size - overlap
-            han = torch.tensor(np.hanning(window_size), requires_grad=False, dtype=th.float)
+            han = th.tensor(np.hanning(window_size), requires_grad=False, dtype=th.float)
 
             # we have now 3 dimensions
             # 1. batch (average over samples)
@@ -145,8 +148,8 @@ def main(command, configs, dataset_dir, subject, log_dir, task):
                 model.zero_grad()
                 output = model(iffted)
                 output[0, -1, 0].backward()
-#                 grads += torch.mean(np.abs(amps_th.grad.squeeze()), dim=0).cpu().numpy()
-                grads.append(torch.mean(torch.abs(amps_th.grad.squeeze()), dim=0).cpu().numpy())
+#                 grads += th.mean(np.abs(amps_th.grad.squeeze()), dim=0).cpu().numpy()
+                grads.append(th.mean(th.abs(amps_th.grad.squeeze()), dim=0).cpu().numpy())
 
             elif 'spectrogram' in command:
                 # time-resolved grads w.r.t frequency amp
@@ -154,36 +157,36 @@ def main(command, configs, dataset_dir, subject, log_dir, task):
                 for i in time_bins:
                     window = X[:, :, :, i:i + window_size] * han
                     amps_th, iffted = fb_fft(window, window_size)
-                    rest_after = torch.tensor(X[:, :, :, i + window_size:], requires_grad=False, dtype=th.float,
+                    rest_after = th.tensor(X[:, :, :, i + window_size:], requires_grad=False, dtype=th.float,
                                               device='cuda')
                     if i > 0:
-                        rest_before = torch.tensor(X[:, :, :, :i], requires_grad=False, dtype=th.float, device='cuda')
-                        input_tensor = torch.cat((rest_before, iffted, rest_after), dim=3)
+                        rest_before = th.tensor(X[:, :, :, :i], requires_grad=False, dtype=th.float, device='cuda')
+                        input_tensor = th.cat((rest_before, iffted, rest_after), dim=3)
                     else:
-                        input_tensor = torch.cat((iffted, rest_after), dim=3)
+                        input_tensor = th.cat((iffted, rest_after), dim=3)
 
                     model.zero_grad()
                     output = model(input_tensor)
                     output[0, -1, 0].backward()
-                    window_grads.append(torch.mean(np.abs(amps_th.grad.squeeze()), dim=0).cpu().numpy()[np.newaxis])
+                    window_grads.append(th.mean(np.abs(amps_th.grad.squeeze()), dim=0).cpu().numpy()[np.newaxis])
 
 #                 grads += np.vstack(window_grads)
                 grads.append(np.vstack(window_grads))
 
             elif 'io' in command:
                 # grads w.r.t. input
-                input_tensor = torch.tensor(X, requires_grad=True, dtype=th.float, device='cuda')
+                input_tensor = th.tensor(X, requires_grad=True, dtype=th.float, device='cuda')
                 model.zero_grad()
                 output = model(input_tensor)
                 output[0, -1, 0].backward()
                 # channels dimension
-                grads.append(torch.mean(torch.abs(input_tensor.grad.squeeze()), dim=0).cpu().numpy())
+                grads.append(th.mean(th.abs(input_tensor.grad.squeeze()), dim=0).cpu().numpy())
 
             elif 'pert' in command:
                 # grads w.r.t. input
                 # find the model output given the input before perturbation
-                with torch.no_grad():
-                    input_tensor = torch.tensor(X, dtype=th.float, device='cuda')
+                with th.no_grad():
+                    input_tensor = th.tensor(X, dtype=th.float, device='cuda')
                     model.zero_grad()
                     output_before_pert = model(input_tensor).detach().cpu().numpy()[0, -1, 0]
                     # perturb the input signal and find the output
@@ -200,7 +203,7 @@ def main(command, configs, dataset_dir, subject, log_dir, task):
         if 'pert' not in command:
 #             grads /= len(data_loader) * cfg.TRAINING.BATCH_SIZE
             grads_array = np.array(grads)
-            np.savetxt(f'grads_{cfg.TRAINING.MODEL}_{task}_{subject}_{rec_name}.csv', grads_array, delimiter=',')
+            # np.savetxt(f'grads_{cfg.TRAINING.MODEL}_{task}_{subject}_{rec_name}.csv', grads_array, delimiter=',')
             grads = stat_fn(np.array(grads), axis=0)
         else:
             output_diff = np.array(output_diff_list)

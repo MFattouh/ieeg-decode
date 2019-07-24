@@ -154,12 +154,12 @@ def main(mode, configs, dataset_dir, subject, log_dir, n_splits, task):
 
                 training_writer = SummaryWriter(os.path.join(log_dir, rec_name, 'fold' + str(fold_idx), 'train'))
                 valid_writer = SummaryWriter(os.path.join(log_dir, rec_name, 'fold' + str(fold_idx), 'valid'))
-                weights_path = os.path.join(log_dir, rec_name, 'fold' + str(fold_idx), 'weights.pt')
+                weights_dir = os.path.join(log_dir, rec_name, 'fold' + str(fold_idx))
 
                 training_trials = [trials[idx] for idx in train_split]
                 valid_trials = [trials[idx] for idx in valid_split]
                 corr, mse = training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials,
-                                          training_writer, valid_trials, valid_writer, weights_path, cuda=CUDA)
+                                          training_writer, valid_trials, valid_writer, weights_dir, cuda=CUDA)
                 if task == 'multi':
                     for task_idx in range(len(corr)):
                         df.loc[(rec_name, 'fold' + str(fold_idx)), TASK_NAMES[task_idx]] = \
@@ -172,7 +172,7 @@ def main(mode, configs, dataset_dir, subject, log_dir, n_splits, task):
 
         elif mode == 'train':
 
-            weights_path = os.path.join(log_dir, rec_name, 'weights.pt')
+            weights_dir = os.path.join(log_dir, rec_name)
 
             training_writer = SummaryWriter(os.path.join(log_dir, rec_name, 'train'))
 
@@ -199,7 +199,7 @@ def main(mode, configs, dataset_dir, subject, log_dir, n_splits, task):
             model, optimizer, scheduler, loss_fun, metric = create_model(in_channels, num_classes, CUDA)
 
             corr, mse = training_loop(model, optimizer, scheduler, loss_fun, metric, training_trials, training_writer,
-                                      valid_trials, valid_writer, weights_path, CUDA)
+                                      valid_trials, valid_writer, weights_dir, CUDA)
 
             if task == 'multi':
                 for task_idx in range(len(corr)):

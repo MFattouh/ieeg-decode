@@ -81,8 +81,8 @@ def crops_from_trial(X, y, crop_len, stride=0, time_last=True, dummy_idx=0, norm
         x_crop = X[crop_idx:crop_idx + crop_len, ]
         y_crop = y[crop_idx:crop_idx + crop_len, ]
         if normalize:
-                y_crop = MinMaxScaler(feature_range=(-1, 1)).fit_transform(y_crop.reshape(-1, 1)).squeeze()
-                x_crop = exponential_running_standardize(x_crop, init_block_size=250, factor_new=0.001, eps=1e-4)
+            y_crop = MinMaxScaler(feature_range=(-1, 1)).fit_transform(y_crop.reshape(-1, 1)).squeeze()
+            x_crop = exponential_running_standardize(x_crop, init_block_size=250, factor_new=0.001, eps=1e-4)
 
         x_list.append(
             np.expand_dims(x_crop.T if time_last else x_crop, axis=dummy_idx).astype(np.float32)
@@ -161,14 +161,14 @@ class BalancedBatchSampler(Sampler):
                 self.batch_sizes.append(num_left_over_samples)
 
     def __iter__(self):
-            batch = []
-            batch_id = 0
-            for idx in self.sampler:
-                batch.append(idx)
-                if len(batch) == self.batch_sizes[batch_id]:
-                    yield batch
-                    batch = []
-                    batch_id += 1
+        batch = []
+        batch_id = 0
+        for idx in self.sampler:
+            batch.append(idx)
+            if len(batch) == self.batch_sizes[batch_id]:
+                yield batch
+                batch = []
+                batch_id += 1
 
     def __len__(self):
         return len(self.batch_sizes)
@@ -216,11 +216,10 @@ class ECoGDataset(Dataset):
 
     def __getitem__(self, idx):
         if self.input_shape[-1] == 'c':
-            X = self._X[idx * self._xstride: idx * self._xstride + self._xwindow, ].squeeze().astype(np.float32)
+            X = self._X[idx * self._xstride: idx * self._xstride + self._xwindow, ].astype(np.float32)
             X = np.expand_dims(X.T if self.time_last else X, axis=self.dummy_idx).astype(np.float32)
         else:
-            X = self._X[:, idx * self._xstride: idx * self._xstride + self._xwindow].squeeze().astype(np.float32)
+            X = self._X[:, idx * self._xstride: idx * self._xstride + self._xwindow].astype(np.float32)
             X = np.expand_dims(X if self.time_last else X.T, axis=self.dummy_idx).astype(np.float32)
         y = self._y[idx * self._ystride: idx * self._ystride + self._ywindow, ].astype(np.float32)
         return X, y
-

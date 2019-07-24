@@ -3,11 +3,14 @@
 import os
 import pandas as pd
 from glob import glob
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 import click
 import numpy as np
 import scipy.stats
+from pathlib import Path
 
 
 @click.command()
@@ -32,11 +35,12 @@ def model_plot(dataset_dir, test, kind, legend, palette):
     print(pvalues)
     corr_values.to_csv(os.path.join(dataset_dir, test + 'corr_values.csv'))
     pvalues.to_csv(os.path.join(dataset_dir, test + 'pvalues.csv'))
-    model_type = os.path.basename(os.path.dirname(dataset_dir))
-    unique_models = set(results.model)
-    if 'layer' in model_type.lower():
-        order = sorted(unique_models, key=lambda model: int(model[0]))
+    exp_mode = 'layers' if 'layer' in results.model.values[0].lower() else 'models'
+    if exp_mode == 'layers':
+        task = Path(dataset_dir).name
+        order = sorted(set(results.model), key=lambda model: int(model[0]))
     else:
+        task = '_'.join([Path(dataset_dir).name, Path(dataset_dir).parent.name]) 
         #  order = ['HYBRID', 'SHALLOW', 'DEEP4', 'RNN']
         order = ['HYBRID', 'SHALLOW', 'DEEP4', 'DEEP5_x2', 'DEEP5_x4', 'RNN']
 
@@ -66,11 +70,12 @@ def model_plot(dataset_dir, test, kind, legend, palette):
     sns.stripplot('model', 'corr', ax=ax, data=results, hue=hue, jitter=True, color=color, order=order,
                   palette=palette, linewidth=1, edgecolor='gray')
     if legend:
-        ax.legend(title='Recording', loc='center', bbox_to_anchor=(1.35, 0.5))
+        ax.legend(title='Recording', loc='center left', bbox_to_anchor=(1.0, 0.5))
     ax.set_xlabel('')
     ax.set_ylabel('Corr. Coeff.')
-    ax.set_ylim([0, 1.0])
-    fig.savefig(os.path.join(dataset_dir,  kind + '_' + model_type + '.png'),  bbox_inches='tight')
+    ax.set_ylim(top=1.0)
+    fig.suptitle(f'{task}')
+    fig.savefig(os.path.join(dataset_dir, f'{kind.upper()}_{task}_{exp_mode.upper()}.png'),  bbox_inches='tight')
 
 
 def create_results_df(dataset_dir):
