@@ -2,7 +2,6 @@ import torch.multiprocessing as mp
 import os
 os.sys.path.insert(0, '..')
 from utils.experiment_util import *
-from tensorboardX import SummaryWriter
 from torch import optim
 import h5py
 import yaml
@@ -13,6 +12,12 @@ import pandas as pd
 from utils.config import cfg, merge_configs
 import random
 import json
+from packaging import version
+
+if version.parse(torch.__version__) < version.parse("1.1.0"):
+    from tensorboardX import SummaryWriter
+else:
+    from torch.utils.tensorboard import SummaryWriter
 
 CUDA = True
 TASK_NAMES = ['XPOS', 'XVEL', 'ABSPOS', 'ABSVEL']

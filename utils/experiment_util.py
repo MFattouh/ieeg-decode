@@ -1,11 +1,10 @@
-from torch.utils.data import DataLoader, ConcatDataset
-import torch.multiprocessing
-from utils.pytorch_util import *
-import h5py
 import logging
 import os
 import datetime
-from utils.config import cfg
+from torch.utils.data import DataLoader, ConcatDataset
+import torch.multiprocessing
+import h5py
+import torch.nn as nn
 from braindecode.models.util import to_dense_prediction_model
 from braindecode.torch_ext.modules import Expression
 from models.hybrid import HybridModel
@@ -15,9 +14,11 @@ from braindecode.models.shallow_fbcsp import ShallowFBCSPNet as Shallow
 from torch.nn.functional import mse_loss
 from torch import optim
 from torch.optim.lr_scheduler import CosineAnnealingLR
-import torch.nn as nn
-from resampy import resample
 from utils.mat73_to_pickle import recursive_dict
+from resampy import resample
+from utils.pytorch_util import *
+from utils.config import cfg
+
 
 logger = logging.getLogger('__name__')
 

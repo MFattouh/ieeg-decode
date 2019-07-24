@@ -3,7 +3,7 @@ HYBRID:
     RNN_TYPE: 'gru'
     NUM_LAYERS: 3
     HIDDEN_SIZE: 64
-    DROPOUT: [[0.3]]
+    DROPOUT: 0.3
     WEIGHTS_DROPOUT: ['weight_ih_l0', 'weight_ih_l1', 'weight_ih_l2', 'weight_hh_l0', 'weight_hh_l1', 'weight_hh_l2']
     NORMALIZATION: None
     MAX_LENGTH: 0  # maximum sequence length (required for BNLSTM)
@@ -27,12 +27,12 @@ TRAINING:
   DUMMY_IDX: 'f'
   OUTPUT_SEQ_LEN: 3319
   RANDOM_SEED: 10418
-  WEIGHT_STATS: True
+  WEIGHT_STATS: False
 
 EVAL:
-  SAVE_PREDICTIONS: True
+  # SAVE_PREDICTIONS: True
   DATASET: 'D'
-  INPUT_STRIDE: 100
+#  INPUT_STRIDE: 100
 
 OPTIMIZATION:
   OPTIMIZER: 'adam'

@@ -13,7 +13,6 @@ HYBRID:
     RNN_TYPE: 'lstm'
     HIDDEN_SIZE: 10
     NUM_LAYERS: 1
-    WEIGHTS_DROPOUT: []
     DROPOUT: 0.0
     NORMALIZATION: None
 

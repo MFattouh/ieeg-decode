@@ -1,18 +1,24 @@
-import torch
 import os
-import yaml
 import json
-import click
 import logging
+import yaml
+import torch
+import click
 os.sys.path.insert(0, '..')
 from utils.experiment_util import *
-from tensorboardX import SummaryWriter
 import h5py
 from glob import glob
 from sklearn.model_selection import KFold, LeaveOneOut, train_test_split
 import pandas as pd
 from utils.config import cfg, merge_configs
 import random
+from packaging import version
+
+if version.parse(torch.__version__) < version.parse("1.1.0"):
+    from tensorboardX import SummaryWriter
+else:
+    from torch.utils.tensorboard import SummaryWriter
+
 
 CUDA = True
 EXPERIMENT_NAME = 'models'

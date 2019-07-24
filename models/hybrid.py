@@ -7,9 +7,15 @@ from torch.autograd import Variable
 from models.bnlstm import LSTM as BNLSTM
 from models.bnlstm import BNLSTMCell
 import numpy as np
-from models.weight_drop import WeightDrop
 from utils.config import cfg
 from itertools import zip_longest
+from packaging import version
+
+
+if version.parse(torch.__version__) < version.parse("1.0.0"):
+    from models.weight_drop import WeightDropV0 as WeightDrop
+else:
+    from models.weight_drop import WeightDropV1 as WeightDrop
 
 supported_rnns = {
     'lstm': nn.LSTM,
@@ -100,8 +106,6 @@ def make_rnns(input_size=0, rnn_type='lstm', normalization=False, dropout=[], we
               num_layers=1, pooling_kernels=[], pooling_strides=[]):
     assert len(pooling_kernels) == len(pooling_strides)
     if not pooling_kernels:
-        if dropout:
-            dropout = [dropout_prop for dropout_props in dropout for dropout_prop in dropout_props]
         return make_rnn_layer(rnn_type, num_layers, input_size, hidden_size, max_length, dropout, weights_dropout,
                               normalization)
     else:

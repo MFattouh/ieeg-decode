@@ -3,7 +3,6 @@ HYBRID:
     RNN_TYPE: 'gru'
     NUM_LAYERS: 1
     HIDDEN_SIZE: 64
-    WEIGHTS_DROPOUT: [[]]
     NORMALIZATION: None
     MAX_LENGTH: 0  # maximum sequence length (required for BNLSTM)
 
